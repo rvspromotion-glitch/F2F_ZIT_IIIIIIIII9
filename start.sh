@@ -5,6 +5,8 @@ echo "==================================="
 echo "Starting ComfyUI Setup"
 echo "==================================="
 
+echo "[debug] running: $0"
+
 COMFY_DIR="${COMFYUI_PATH:-/workspace/ComfyUI}"
 CUSTOM_NODES="${COMFY_DIR}/custom_nodes"
 MODELS_DIR="${COMFY_DIR}/models"
@@ -40,6 +42,7 @@ mkdir -p "$PIP_CACHE_DIR"
 
 # -----------------------------
 # Hard constraints (prevents numpy2 / transformers drift)
+# Also pin opencv to avoid numpy>=2 requirement from opencv 4.12+
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -49,6 +52,7 @@ transformers==4.39.3
 tokenizers==0.15.2
 safetensors
 mediapipe==0.10.14
+opencv-python<4.12
 sageattention
 EOF
 
@@ -57,6 +61,7 @@ export PIP_CONSTRAINT="$CONSTRAINTS_FILE"
 echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
+# Base pins (non-fatal if some wheels are missing on the image)
 pip install -q --upgrade --prefer-binary \
   -c "$CONSTRAINTS_FILE" \
   "numpy<2" \
@@ -65,8 +70,40 @@ pip install -q --upgrade --prefer-binary \
   "tokenizers==0.15.2" \
   "safetensors" \
   "mediapipe==0.10.14" \
+  "opencv-python<4.12" \
   "sageattention" || true
 
+# -----------------------------
+# Critical fix: ComfyUI comfy_kitchen requires torch >= 2.4
+# Your template shows torch 2.1.1+cu121, which breaks at import time:
+# AttributeError: torch.library has no attribute custom_op
+# -----------------------------
+NEED_TORCH_UPGRADE="$(
+python3 - <<'PY'
+import torch
+v = torch.__version__.split("+")[0]
+parts = v.split(".")
+maj = int(parts[0]) if len(parts) > 0 else 0
+minr = int(parts[1]) if len(parts) > 1 else 0
+print("1" if (maj < 2 or (maj == 2 and minr < 4)) else "0")
+PY
+)"
+
+echo "[torch] current: $(python3 -c 'import torch; print(torch.__version__)')"
+echo "[torch] need_upgrade=${NEED_TORCH_UPGRADE}"
+
+if [ "$NEED_TORCH_UPGRADE" = "1" ]; then
+  echo "[torch] Upgrading torch stack to cu121..."
+  pip install -q --upgrade --no-cache-dir --force-reinstall \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
+    "torch==2.4.1+cu121" "torchvision==0.19.1+cu121" "torchaudio==2.4.1+cu121"
+fi
+
+echo "[torch] after: $(python3 -c 'import torch; print(torch.__version__)')"
+
+# -----------------------------
+# Debug: versions
+# -----------------------------
 echo "[debug] Versions:"
 python3 - <<'PY'
 import sys
@@ -80,26 +117,12 @@ import transformers
 print("transformers:", transformers.__version__)
 import mediapipe
 print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
+try:
+    import cv2
+    print("opencv:", cv2.__version__)
+except Exception as e:
+    print("opencv: not available:", e)
 PY
-
-# -----------------------------
-# Fix ComfyUI + comfy_kitchen requires torch >= 2.4 (torch.library.custom_op)
-# -----------------------------
-python3 - <<'PY'
-import torch
-from packaging import version
-v = version.parse(torch.__version__.split("+")[0])
-print("torch:", torch.__version__)
-if v < version.parse("2.4.0"):
-    raise SystemExit(1)
-PY
-
-if [ $? -ne 0 ]; then
-  echo "[torch] Upgrading torch stack to cu121 (required by comfy_kitchen)..."
-  pip install -q --upgrade --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/cu121 \
-    "torch==2.4.1+cu121" "torchvision==0.19.1+cu121" "torchaudio==2.4.1+cu121"
-fi
 
 # -----------------------------
 # Helpers
@@ -153,7 +176,6 @@ civit_download() {
     "${header[@]}" \
     -o "$out" "$url"
 
-  # If we got HTML (login page), delete it so you dont think its a model
   if file "$out" | grep -qi "HTML"; then
     echo "[civitai] ERROR: got HTML instead of model (token missing/invalid/gated). Removing $out"
     rm -f "$out"
@@ -174,14 +196,11 @@ env_lora_download() {
 
   mkdir -p "$out_dir"
 
-  # Auto-name from URL if not provided
   if [ -z "$filename" ]; then
     filename="$(basename "${url%%\?*}")"
   fi
 
-  # sanitize spaces just in case
   filename="${filename// /_}"
-
   local out="${out_dir}/${filename}"
 
   echo "[lora] url_var=${url_var}"
@@ -193,12 +212,10 @@ env_lora_download() {
     return 0
   fi
 
-  # Dropbox can be picky; use curl with UA + retries + resume
   curl -L --fail --retry 10 --retry-delay 2 -C - \
     -A "Mozilla/5.0" \
     -o "$out" "$url"
 
-  # Detect HTML instead of a safetensors binary
   if file "$out" | grep -qi "HTML"; then
     echo "[lora] ERROR: got HTML instead of model (Dropbox auth/blocked). Removing $out"
     rm -f "$out"
@@ -213,10 +230,9 @@ safe_pip_install_req() {
   local req="$1"
   [ -f "$req" ] || return 0
 
-  # Filter lines that must never override global pins
   local tmpreq
   tmpreq="$(mktemp)"
-  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf)([<=> ].*)?$' "$req" > "$tmpreq" || true
+  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python)([<=> ].*)?$' "$req" > "$tmpreq" || true
 
   pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
   rm -f "$tmpreq"
@@ -284,86 +300,9 @@ wait
 
 echo "[models] Downloads completed."
 
-# -----------------------------
-# Cache repos on persistent volume
-# -----------------------------
-#REPO_CACHE="${PERSIST_DIR}/_repos"
-#mkdir -p "$REPO_CACHE"
-
-# Extra bbox models repo
-#BBOX_DIR="${MODELS_DIR}/ultralytics/bbox"
-#ULTRA_REPO_DIR="${REPO_CACHE}/IIIIIIIII_ZIT_V3_Ultralytics"
-#UPDATE_MODELS="${UPDATE_MODELS:-0}"
-#BBOX_MARK="${PERSIST_DIR}/.bbox-models-copied"
-
-#if [ ! -d "${ULTRA_REPO_DIR}/.git" ]; then
-#  echo "[bbox] cloning ultralytics model repo (one-time)..."
-#  rm -rf "${ULTRA_REPO_DIR}"
-#  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --progress \
-#    "https://github.com/rvspromotion-glitch/IIIIIIIII_ZIT_V3_Ultralytics.git" \
-#    "${ULTRA_REPO_DIR}"
-#elif [ "$UPDATE_MODELS" = "1" ]; then
-#  echo "[bbox] updating ultralytics model repo..."
-#  git -C "${ULTRA_REPO_DIR}" pull --rebase || true
-#else
-#  echo "[bbox] using cached ultralytics model repo (no pull)"
-#fi
-
-#if [ ! -f "$BBOX_MARK" ] || [ "$UPDATE_MODELS" = "1" ]; then
-#  echo "[bbox] syncing .pt files into ${BBOX_DIR}..."
-#  find "${ULTRA_REPO_DIR}" -type f -name "*.pt" -exec cp -f {} "${BBOX_DIR}/" \; || true
-#  touch "$BBOX_MARK"
-#fi
-
-# Node pack repo (symlink into custom_nodes)
-# ZIT_REPO_DIR="${REPO_CACHE}/IIIIIIII_ZIT_V3"
-# UPDATE_NODES="${UPDATE_NODES:-0}"
-#REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
-
-#if [ ! -d "${ZIT_REPO_DIR}/.git" ]; then
-#  echo "[nodes] cloning node pack into cache (one-time)..."
-#  rm -rf "${ZIT_REPO_DIR}"
-#  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --shallow-submodules --recurse-submodules --progress \
-#    "https://github.com/rvspromotion-glitch/IIIIIIII_ZIT_V3.git" \
-#    "${ZIT_REPO_DIR}"
-#  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive --depth 1 || true
-#elif [ "$UPDATE_NODES" = "1" ]; then
-#  echo "[nodes] updating cached node pack..."
-#  git -C "${ZIT_REPO_DIR}" pull --rebase || true
-#  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive || true
-#else
-#  echo "[nodes] using cached node pack (no pull)"
-#fi
-
-#echo "[nodes] creating symlinks in custom_nodes..."
-#for dir in "${ZIT_REPO_DIR}"/*; do
-#  [ -d "$dir" ] || continue
-#  node_name="$(basename "$dir")"
-#  case "$node_name" in .git|.github|__pycache__) continue ;; esac
-#  ln -sfn "$dir" "${CUSTOM_NODES}/${node_name}"
-#done
-
-# Install node requirements once (constrained)
-#INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
-#if [ "$INSTALL_NODE_REQS" = "1" ]; then
-#  if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
-#    echo "[pip] Installing node requirements (once, constrained)..."
-#    for dir in "${ZIT_REPO_DIR}"/*; do
-#      [ -d "$dir" ] || continue
-#      req="${dir}/requirements.txt"
-#      if [ -f "$req" ]; then
-#        echo "  - [pip] $(basename "$dir")/requirements.txt"
-#        safe_pip_install_req "$req"
-#      fi
-#    done
-#    touch "$REQ_MARK"
-#  else
-#    echo "[pip] Node requirements already installed (skip)"
-#  fi
-#fi
-
-# Final safety
-pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" "numpy<2" "mediapipe==0.10.14" || true
+# Final safety (non-fatal)
+pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  "numpy<2" "mediapipe==0.10.14" "opencv-python<4.12" || true
 
 # -----------------------------
 # Start JupyterLab
