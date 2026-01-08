@@ -279,8 +279,14 @@ REPO_CACHE="${PERSIST_DIR}/_repos"
 mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
 
 UPDATE_NODES="${UPDATE_NODES:-0}"
-REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
+
+# during debugging, set FORCE_NODE_REQS=1 to ignore the marker
+FORCE_NODE_REQS="${FORCE_NODE_REQS:-0}"
+REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
+
+# Always use pip tied to python3
+PIP="python3 -m pip"
 
 clone_or_update() {
   local name="$1"
@@ -302,29 +308,47 @@ clone_or_update() {
     echo "[nodes] cached ${name} (no pull)"
   fi
 
-  ln -sfn "$dest" "${CUSTOM_NODES}/${name}"
+  # Find actual node root:
+  # Prefer a folder that contains __init__.py (ComfyUI custom node convention)
+  local node_root="$dest"
+  if [ ! -f "${node_root}/__init__.py" ]; then
+    # common pattern: repo/custom_nodes/<NodeName> or repo/<NodeName>
+    local candidate
+    candidate="$(find "$dest" -maxdepth 3 -type f -name "__init__.py" \
+      ! -path "*/.git/*" ! -path "*/__pycache__/*" | head -n 1 || true)"
+    if [ -n "$candidate" ]; then
+      node_root="$(dirname "$candidate")"
+    fi
+  fi
+
+  echo "[nodes] link: ${name} -> ${node_root}"
+  ln -sfn "$node_root" "${CUSTOM_NODES}/${name}"
 }
 
 echo "==================================="
 echo "Installing custom nodes (cached)"
 echo "==================================="
 
+# These provide your missing nodes:
+clone_or_update "ComfyUI-KJNodes"            "https://github.com/kijai/ComfyUI-KJNodes.git"          # Film Grain, SequentialNumberGenerator, MotionBlending
+clone_or_update "ComfyUI-VFI"                "https://github.com/Fannovel16/ComfyUI-VFI.git"        # RIFE VFI
+clone_or_update "ComfyUI-WanVideoWrapper"    "https://github.com/kijai/ComfyUI-WanVideoWrapper.git" # WanVideoImageResizeToClosest
+clone_or_update "ComfyUI-Custom-Scripts"     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git" # TextBox1
+
+# Your other packs:
 clone_or_update "ComfyUI-Impact-Pack"        "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
 clone_or_update "ComfyUI-Impact-Subpack"     "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
-clone_or_update "ComfyUI-KJNodes"            "https://github.com/kijai/ComfyUI-KJNodes.git"
 clone_or_update "ComfyUI-VideoHelperSuite"   "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
-clone_or_update "ComfyUI-WanVideoWrapper"    "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
 clone_or_update "ComfyUI-GGUF"               "https://github.com/city96/ComfyUI-GGUF.git"
 clone_or_update "ComfyUI_essentials"         "https://github.com/cubiq/ComfyUI_essentials.git"
 clone_or_update "a-person-mask-generator"    "https://github.com/djbielejeski/a-person-mask-generator.git"
-clone_or_update "ComfyUI-VFI"                "https://github.com/Fannovel16/ComfyUI-VFI.git"
-clone_or_update "ComfyUI-Custom-Scripts"     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
 clone_or_update "comfyui_controlnet_aux"     "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"              "https://github.com/rgthree/rgthree-comfy.git"
 
+# Install requirements (once, constrained)
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
-  if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
-    echo "[pip] Installing node requirements (once, constrained)..."
+  if [ "$FORCE_NODE_REQS" = "1" ] || [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
+    echo "[pip] Installing node requirements (constrained)..."
     for dir in "${REPO_CACHE}"/*; do
       [ -d "$dir" ] || continue
       req="${dir}/requirements.txt"
@@ -338,6 +362,9 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
     echo "[pip] Node requirements already installed (skip)"
   fi
 fi
+
+echo "[nodes] Listing custom_nodes:"
+ls -la "$CUSTOM_NODES" || true
 
 echo "[nodes] Done."
 
