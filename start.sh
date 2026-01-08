@@ -83,6 +83,25 @@ print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", 
 PY
 
 # -----------------------------
+# Fix ComfyUI + comfy_kitchen requires torch >= 2.4 (torch.library.custom_op)
+# -----------------------------
+python3 - <<'PY'
+import torch
+from packaging import version
+v = version.parse(torch.__version__.split("+")[0])
+print("torch:", torch.__version__)
+if v < version.parse("2.4.0"):
+    raise SystemExit(1)
+PY
+
+if [ $? -ne 0 ]; then
+  echo "[torch] Upgrading torch stack to cu121 (required by comfy_kitchen)..."
+  pip install -q --upgrade --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
+    "torch==2.4.1+cu121" "torchvision==0.19.1+cu121" "torchaudio==2.4.1+cu121"
+fi
+
+# -----------------------------
 # Helpers
 # -----------------------------
 download() {
