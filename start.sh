@@ -76,31 +76,6 @@ pip install -q --upgrade --prefer-binary \
   "opencv-python<4.12" \
   "sageattention" || true
 
-# -----------------------------
-# Critical fix: comfy_kitchen requires torch >= 2.4 (torch.library.custom_op)
-# -----------------------------
-NEED_TORCH_UPGRADE="$(
-python3 - <<'PY'
-import torch
-v = torch.__version__.split("+")[0]
-maj, minr = (v.split(".")+["0","0"])[:2]
-maj = int(maj); minr = int(minr)
-print("1" if (maj < 2 or (maj == 2 and minr < 4)) else "0")
-PY
-)"
-
-echo "[torch] current: $(python3 -c 'import torch; print(torch.__version__)')"
-echo "[torch] need_upgrade=${NEED_TORCH_UPGRADE}"
-
-if [ "$NEED_TORCH_UPGRADE" = "1" ]; then
-  echo "[torch] Upgrading torch stack to cu121..."
-  pip install -q --upgrade --no-cache-dir --force-reinstall \
-    --extra-index-url https://download.pytorch.org/whl/cu121 \
-    "torch==2.4.1+cu121" "torchvision==0.19.1+cu121" "torchaudio==2.4.1+cu121"
-fi
-
-echo "[torch] after: $(python3 -c 'import torch; print(torch.__version__)')"
-
 echo "[debug] Versions:"
 python3 - <<'PY'
 import sys
