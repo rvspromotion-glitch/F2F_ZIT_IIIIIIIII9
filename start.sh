@@ -257,12 +257,6 @@ download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_file
   "${MODELS_DIR}/clip/qwen_3_4b.safetensors" &
 wait
 
-civit_download "https://civitai.com/api/download/models/1511445?type=Model&format=SafeTensor" \
-  "${MODELS_DIR}/loras/1511445_Spread i5XL.safetensors" &
-civit_download "https://civitai.com/api/download/models/2435561?type=Model&format=SafeTensor&size=pruned&fp=fp16" \
-  "${MODELS_DIR}/checkpoints/2435561_Photo4_fp16_pruned.safetensors" &
-wait
-
 # -----------------------------
 # Optional character LoRA via env var
 # -----------------------------
@@ -283,52 +277,52 @@ ULTRA_REPO_DIR="${REPO_CACHE}/IIIIIIIII_ZIT_V3_Ultralytics"
 UPDATE_MODELS="${UPDATE_MODELS:-0}"
 BBOX_MARK="${PERSIST_DIR}/.bbox-models-copied"
 
-if [ ! -d "${ULTRA_REPO_DIR}/.git" ]; then
-  echo "[bbox] cloning ultralytics model repo (one-time)..."
-  rm -rf "${ULTRA_REPO_DIR}"
-  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --progress \
-    "https://github.com/rvspromotion-glitch/IIIIIIIII_ZIT_V3_Ultralytics.git" \
-    "${ULTRA_REPO_DIR}"
-elif [ "$UPDATE_MODELS" = "1" ]; then
-  echo "[bbox] updating ultralytics model repo..."
-  git -C "${ULTRA_REPO_DIR}" pull --rebase || true
-else
-  echo "[bbox] using cached ultralytics model repo (no pull)"
-fi
+#if [ ! -d "${ULTRA_REPO_DIR}/.git" ]; then
+#  echo "[bbox] cloning ultralytics model repo (one-time)..."
+#  rm -rf "${ULTRA_REPO_DIR}"
+#  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --progress \
+#    "https://github.com/rvspromotion-glitch/IIIIIIIII_ZIT_V3_Ultralytics.git" \
+#    "${ULTRA_REPO_DIR}"
+#elif [ "$UPDATE_MODELS" = "1" ]; then
+#  echo "[bbox] updating ultralytics model repo..."
+#  git -C "${ULTRA_REPO_DIR}" pull --rebase || true
+#else
+#  echo "[bbox] using cached ultralytics model repo (no pull)"
+#fi
 
-if [ ! -f "$BBOX_MARK" ] || [ "$UPDATE_MODELS" = "1" ]; then
-  echo "[bbox] syncing .pt files into ${BBOX_DIR}..."
-  find "${ULTRA_REPO_DIR}" -type f -name "*.pt" -exec cp -f {} "${BBOX_DIR}/" \; || true
-  touch "$BBOX_MARK"
-fi
+#if [ ! -f "$BBOX_MARK" ] || [ "$UPDATE_MODELS" = "1" ]; then
+#  echo "[bbox] syncing .pt files into ${BBOX_DIR}..."
+#  find "${ULTRA_REPO_DIR}" -type f -name "*.pt" -exec cp -f {} "${BBOX_DIR}/" \; || true
+#  touch "$BBOX_MARK"
+#fi
 
 # Node pack repo (symlink into custom_nodes)
-ZIT_REPO_DIR="${REPO_CACHE}/IIIIIIII_ZIT_V3"
-UPDATE_NODES="${UPDATE_NODES:-0}"
-REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
+# ZIT_REPO_DIR="${REPO_CACHE}/IIIIIIII_ZIT_V3"
+# UPDATE_NODES="${UPDATE_NODES:-0}"
+#REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 
-if [ ! -d "${ZIT_REPO_DIR}/.git" ]; then
-  echo "[nodes] cloning node pack into cache (one-time)..."
-  rm -rf "${ZIT_REPO_DIR}"
-  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --shallow-submodules --recurse-submodules --progress \
-    "https://github.com/rvspromotion-glitch/IIIIIIII_ZIT_V3.git" \
-    "${ZIT_REPO_DIR}"
-  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive --depth 1 || true
-elif [ "$UPDATE_NODES" = "1" ]; then
-  echo "[nodes] updating cached node pack..."
-  git -C "${ZIT_REPO_DIR}" pull --rebase || true
-  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive || true
-else
-  echo "[nodes] using cached node pack (no pull)"
-fi
+#if [ ! -d "${ZIT_REPO_DIR}/.git" ]; then
+#  echo "[nodes] cloning node pack into cache (one-time)..."
+#  rm -rf "${ZIT_REPO_DIR}"
+#  GIT_TERMINAL_PROMPT=0 git clone --depth 1 --shallow-submodules --recurse-submodules --progress \
+#    "https://github.com/rvspromotion-glitch/IIIIIIII_ZIT_V3.git" \
+#    "${ZIT_REPO_DIR}"
+#  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive --depth 1 || true
+#elif [ "$UPDATE_NODES" = "1" ]; then
+#  echo "[nodes] updating cached node pack..."
+#  git -C "${ZIT_REPO_DIR}" pull --rebase || true
+#  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive || true
+#else
+#  echo "[nodes] using cached node pack (no pull)"
+#fi
 
-echo "[nodes] creating symlinks in custom_nodes..."
-for dir in "${ZIT_REPO_DIR}"/*; do
-  [ -d "$dir" ] || continue
-  node_name="$(basename "$dir")"
-  case "$node_name" in .git|.github|__pycache__) continue ;; esac
-  ln -sfn "$dir" "${CUSTOM_NODES}/${node_name}"
-done
+#echo "[nodes] creating symlinks in custom_nodes..."
+#for dir in "${ZIT_REPO_DIR}"/*; do
+#  [ -d "$dir" ] || continue
+#  node_name="$(basename "$dir")"
+#  case "$node_name" in .git|.github|__pycache__) continue ;; esac
+#  ln -sfn "$dir" "${CUSTOM_NODES}/${node_name}"
+#done
 
 # Install node requirements once (constrained)
 INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
