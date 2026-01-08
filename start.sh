@@ -238,6 +238,97 @@ safe_pip_install_req() {
   rm -f "$tmpreq"
 }
 
+# =============================
+# Custom Nodes: clone + install
+# =============================
+
+REPO_CACHE="${PERSIST_DIR}/_repos"
+mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
+
+UPDATE_NODES="${UPDATE_NODES:-0}"
+REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
+
+clone_or_update() {
+  local name="$1"
+  local url="$2"
+  local dest="${REPO_CACHE}/${name}"
+
+  if [ ! -d "${dest}/.git" ]; then
+    echo "[nodes] cloning ${name}..."
+    rm -rf "$dest"
+    GIT_TERMINAL_PROMPT=0 git clone --depth 1 --progress "$url" "$dest"
+  elif [ "$UPDATE_NODES" = "1" ]; then
+    echo "[nodes] updating ${name}..."
+    git -C "$dest" pull --rebase || true
+  else
+    echo "[nodes] cached ${name} (no pull)"
+  fi
+
+  # Symlink into custom_nodes (clean and stable)
+  ln -sfn "$dest" "${CUSTOM_NODES}/${name}"
+}
+
+echo "==================================="
+echo "Installing custom nodes (cached)"
+echo "==================================="
+
+# --- Impact Pack ---
+clone_or_update "ComfyUI-Impact-Pack"        "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
+clone_or_update "ComfyUI-Impact-Subpack"     "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+
+# --- KJ nodes ---
+clone_or_update "ComfyUI-KJNodes"            "https://github.com/kijai/ComfyUI-KJNodes.git"
+
+# --- Video helpers ---
+clone_or_update "ComfyUI-VideoHelperSuite"   "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+clone_or_update "ComfyUI-WanVideoWrapper"    "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
+
+# --- GGUF loader ---
+clone_or_update "ComfyUI-GGUF"               "https://github.com/city96/ComfyUI-GGUF.git"
+
+# --- Essentials ---
+clone_or_update "ComfyUI_essentials"         "https://github.com/cubiq/ComfyUI_essentials.git"
+
+# --- Person mask generator ---
+clone_or_update "a-person-mask-generator"    "https://github.com/djbielejeski/a-person-mask-generator.git"
+
+# --- VFI / RIFE ---
+clone_or_update "ComfyUI-VFI"                "https://github.com/Fannovel16/ComfyUI-VFI.git"
+
+# --- Custom Scripts (TextBox1) ---
+clone_or_update "ComfyUI-Custom-Scripts"     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
+
+# --- controlnet_aux (MediaPipe-FaceMeshPreprocessor) ---
+clone_or_update "comfyui_controlnet_aux"     "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
+
+# --- rgthree ---
+clone_or_update "rgthree-comfy"              "https://github.com/rgthree/rgthree-comfy.git"
+
+# -----------------------------
+# Install requirements once (constrained)
+# -----------------------------
+INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
+if [ "$INSTALL_NODE_REQS" = "1" ]; then
+  if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
+    echo "[pip] Installing node requirements (once, constrained)..."
+
+    for dir in "${REPO_CACHE}"/*; do
+      [ -d "$dir" ] || continue
+      req="${dir}/requirements.txt"
+      if [ -f "$req" ]; then
+        echo "  - [pip] $(basename "$dir")/requirements.txt"
+        safe_pip_install_req "$req"
+      fi
+    done
+
+    touch "$REQ_MARK"
+  else
+    echo "[pip] Node requirements already installed (skip)"
+  fi
+fi
+
+echo "[nodes] Done."
+
 # -----------------------------
 # Model directories
 # -----------------------------
