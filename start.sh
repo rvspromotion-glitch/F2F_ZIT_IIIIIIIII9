@@ -268,14 +268,14 @@ echo "[models] Downloads completed."
 # -----------------------------
 # Cache repos on persistent volume
 # -----------------------------
-REPO_CACHE="${PERSIST_DIR}/_repos"
-mkdir -p "$REPO_CACHE"
+#REPO_CACHE="${PERSIST_DIR}/_repos"
+#mkdir -p "$REPO_CACHE"
 
 # Extra bbox models repo
-BBOX_DIR="${MODELS_DIR}/ultralytics/bbox"
-ULTRA_REPO_DIR="${REPO_CACHE}/IIIIIIIII_ZIT_V3_Ultralytics"
-UPDATE_MODELS="${UPDATE_MODELS:-0}"
-BBOX_MARK="${PERSIST_DIR}/.bbox-models-copied"
+#BBOX_DIR="${MODELS_DIR}/ultralytics/bbox"
+#ULTRA_REPO_DIR="${REPO_CACHE}/IIIIIIIII_ZIT_V3_Ultralytics"
+#UPDATE_MODELS="${UPDATE_MODELS:-0}"
+#BBOX_MARK="${PERSIST_DIR}/.bbox-models-copied"
 
 #if [ ! -d "${ULTRA_REPO_DIR}/.git" ]; then
 #  echo "[bbox] cloning ultralytics model repo (one-time)..."
@@ -325,23 +325,23 @@ BBOX_MARK="${PERSIST_DIR}/.bbox-models-copied"
 #done
 
 # Install node requirements once (constrained)
-INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
-if [ "$INSTALL_NODE_REQS" = "1" ]; then
-  if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
-    echo "[pip] Installing node requirements (once, constrained)..."
-    for dir in "${ZIT_REPO_DIR}"/*; do
-      [ -d "$dir" ] || continue
-      req="${dir}/requirements.txt"
-      if [ -f "$req" ]; then
-        echo "  - [pip] $(basename "$dir")/requirements.txt"
-        safe_pip_install_req "$req"
-      fi
-    done
-    touch "$REQ_MARK"
-  else
-    echo "[pip] Node requirements already installed (skip)"
-  fi
-fi
+#INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
+#if [ "$INSTALL_NODE_REQS" = "1" ]; then
+#  if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
+#    echo "[pip] Installing node requirements (once, constrained)..."
+#    for dir in "${ZIT_REPO_DIR}"/*; do
+#      [ -d "$dir" ] || continue
+#      req="${dir}/requirements.txt"
+#      if [ -f "$req" ]; then
+#        echo "  - [pip] $(basename "$dir")/requirements.txt"
+#        safe_pip_install_req "$req"
+#      fi
+#    done
+#    touch "$REQ_MARK"
+#  else
+#    echo "[pip] Node requirements already installed (skip)"
+#  fi
+#fi
 
 # Final safety
 pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" "numpy<2" "mediapipe==0.10.14" || true
