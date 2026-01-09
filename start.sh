@@ -32,12 +32,6 @@ fi
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
 # -----------------------------
-# Make git non-interactive and avoid inherited credential helpers/headers
-# -----------------------------
-git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null || true
-git config --global --unset-all credential.helper 2>/dev/null || true
-
-# -----------------------------
 # Speed: persistent pip cache
 # -----------------------------
 export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
@@ -46,7 +40,7 @@ mkdir -p "$PIP_CACHE_DIR"
 
 # -----------------------------
 # Hard constraints (prevents numpy2 / transformers drift)
-# Also pin opencv to avoid numpy>=2 requirement from opencv 4.12+
+# Keep opencv pinned below 4.12 to avoid numpy>=2 requirement.
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -65,7 +59,7 @@ export PIP_CONSTRAINT="$CONSTRAINTS_FILE"
 echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
-pip install -q --upgrade --prefer-binary \
+python3 -m pip install -q --upgrade --prefer-binary \
   -c "$CONSTRAINTS_FILE" \
   "numpy<2" \
   "protobuf<5" \
@@ -197,7 +191,7 @@ env_lora_download() {
   echo "[lora] done: $(ls -lh "$out" | awk '{print $5, $9}')"
 }
 
-# Install node requirements but never allow torch stack / numpy / transformers / opencv to be changed.
+# Install node requirements but never allow torch stack / numpy / transformers to be changed.
 safe_pip_install_req() {
   local req="$1"
   [ -f "$req" ] || return 0
@@ -206,7 +200,7 @@ safe_pip_install_req() {
   tmpreq="$(mktemp)"
   grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python)([<=> ].*)?$' "$req" > "$tmpreq" || true
 
-  pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  python3 -m pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
   rm -f "$tmpreq"
 }
 
@@ -264,6 +258,12 @@ download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_file
   "${MODELS_DIR}/clip/qwen_3_4b.safetensors" &
 wait
 
+civit_download "https://civitai.com/api/download/models/1511445?type=Model&format=SafeTensor" \
+  "${MODELS_DIR}/loras/1511445_Spread i5XL.safetensors" &
+civit_download "https://civitai.com/api/download/models/2435561?type=Model&format=SafeTensor&size=pruned&fp=fp16" \
+  "${MODELS_DIR}/checkpoints/2435561_Photo4_fp16_pruned.safetensors" &
+wait
+
 # -----------------------------
 # Optional character LoRA via env var
 # -----------------------------
@@ -272,21 +272,19 @@ wait
 
 echo "[models] Downloads completed."
 
-# =============================
-# Custom Nodes: clone + install (cached, non-fatal)
-# =============================
+# -----------------------------
+# Cache repos on persistent volume
+# -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
-mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
+mkdir -p "$REPO_CACHE"
 
+# -----------------------------
+# Git helper: clone/update + symlink into custom_nodes (non-fatal)
+# -----------------------------
 UPDATE_NODES="${UPDATE_NODES:-0}"
 INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
-
-# during debugging, set FORCE_NODE_REQS=1 to ignore the marker
 FORCE_NODE_REQS="${FORCE_NODE_REQS:-0}"
 REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
-
-# Always use pip tied to python3
-PIP="python3 -m pip"
 
 clone_or_update() {
   local name="$1"
@@ -308,47 +306,34 @@ clone_or_update() {
     echo "[nodes] cached ${name} (no pull)"
   fi
 
-  # Find actual node root:
-  # Prefer a folder that contains __init__.py (ComfyUI custom node convention)
-  local node_root="$dest"
-  if [ ! -f "${node_root}/__init__.py" ]; then
-    # common pattern: repo/custom_nodes/<NodeName> or repo/<NodeName>
-    local candidate
-    candidate="$(find "$dest" -maxdepth 3 -type f -name "__init__.py" \
-      ! -path "*/.git/*" ! -path "*/__pycache__/*" | head -n 1 || true)"
-    if [ -n "$candidate" ]; then
-      node_root="$(dirname "$candidate")"
-    fi
-  fi
-
-  echo "[nodes] link: ${name} -> ${node_root}"
-  ln -sfn "$node_root" "${CUSTOM_NODES}/${name}"
+  ln -sfn "$dest" "${CUSTOM_NODES}/${name}"
 }
 
 echo "==================================="
-echo "Installing custom nodes (cached)"
+echo "Installing custom nodes + Manager"
 echo "==================================="
 
-# These provide your missing nodes:
-clone_or_update "ComfyUI-KJNodes"            "https://github.com/kijai/ComfyUI-KJNodes.git"          # Film Grain, SequentialNumberGenerator, MotionBlending
-clone_or_update "ComfyUI-VFI"                "https://github.com/Fannovel16/ComfyUI-VFI.git"        # RIFE VFI
-clone_or_update "ComfyUI-WanVideoWrapper"    "https://github.com/kijai/ComfyUI-WanVideoWrapper.git" # WanVideoImageResizeToClosest
-clone_or_update "ComfyUI-Custom-Scripts"     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git" # TextBox1
+# --- ComfyUI-Manager (adds the Manager button/UI) ---
+clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.git"
 
-# Your other packs:
+# --- Your node list ---
 clone_or_update "ComfyUI-Impact-Pack"        "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
 clone_or_update "ComfyUI-Impact-Subpack"     "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+clone_or_update "ComfyUI-KJNodes"            "https://github.com/kijai/ComfyUI-KJNodes.git"
 clone_or_update "ComfyUI-VideoHelperSuite"   "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+clone_or_update "ComfyUI-WanVideoWrapper"    "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
 clone_or_update "ComfyUI-GGUF"               "https://github.com/city96/ComfyUI-GGUF.git"
 clone_or_update "ComfyUI_essentials"         "https://github.com/cubiq/ComfyUI_essentials.git"
 clone_or_update "a-person-mask-generator"    "https://github.com/djbielejeski/a-person-mask-generator.git"
+clone_or_update "ComfyUI-VFI"                "https://github.com/Fannovel16/ComfyUI-VFI.git"
+clone_or_update "ComfyUI-Custom-Scripts"     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
 clone_or_update "comfyui_controlnet_aux"     "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"              "https://github.com/rgthree/rgthree-comfy.git"
 
-# Install requirements (once, constrained)
+# Install node requirements once (constrained)
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ "$FORCE_NODE_REQS" = "1" ] || [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
-    echo "[pip] Installing node requirements (constrained)..."
+    echo "[pip] Installing node requirements (once, constrained)..."
     for dir in "${REPO_CACHE}"/*; do
       [ -d "$dir" ] || continue
       req="${dir}/requirements.txt"
@@ -363,13 +348,11 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   fi
 fi
 
-echo "[nodes] Listing custom_nodes:"
+echo "[nodes] Installed nodes in custom_nodes:"
 ls -la "$CUSTOM_NODES" || true
 
-echo "[nodes] Done."
-
 # Final safety
-pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" "mediapipe==0.10.14" "opencv-python<4.12" || true
 
 # -----------------------------
