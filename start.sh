@@ -32,6 +32,14 @@ fi
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
 # -----------------------------
+# Make git non-interactive and avoid inherited credential helpers/headers
+# -----------------------------
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/true
+git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+git config --global --unset-all credential.helper 2>/dev/null || true
+
+# -----------------------------
 # Speed: persistent pip cache
 # -----------------------------
 export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
@@ -39,18 +47,18 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$PIP_CACHE_DIR"
 
 # -----------------------------
-# Hard constraints (prevents numpy2 / transformers drift)
-# Keep opencv pinned below 4.12 to avoid numpy>=2 requirement.
+# Hard constraints (prevents numpy2 drift)
+# NOTE: WanVideoWrapper wants diffusers>=0.32 + accelerate; that typically needs newer transformers.
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
 numpy<2
 protobuf<5
-transformers==4.39.3
-tokenizers==0.15.2
+opencv-python<4.12
+transformers==4.45.1
+tokenizers==0.19.1
 safetensors
 mediapipe==0.10.14
-opencv-python<4.12
 sageattention
 EOF
 
@@ -59,35 +67,38 @@ export PIP_CONSTRAINT="$CONSTRAINTS_FILE"
 echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
-python3 -m pip install -q --upgrade --prefer-binary \
+pip install -q --upgrade --prefer-binary \
   -c "$CONSTRAINTS_FILE" \
   "numpy<2" \
   "protobuf<5" \
-  "transformers==4.39.3" \
-  "tokenizers==0.15.2" \
+  "opencv-python<4.12" \
+  "transformers==4.45.1" \
+  "tokenizers==0.19.1" \
   "safetensors" \
   "mediapipe==0.10.14" \
-  "opencv-python<4.12" \
   "sageattention" || true
 
 echo "[debug] Versions:"
 python3 - <<'PY'
 import sys
 print("python:", sys.version)
-import torch
-print("torch:", torch.__version__)
-print("cuda:", torch.version.cuda)
+try:
+    import torch
+    print("torch:", torch.__version__)
+    print("cuda:", torch.version.cuda)
+except Exception as e:
+    print("torch: not available:", e)
 import numpy
 print("numpy:", numpy.__version__)
 import transformers
 print("transformers:", transformers.__version__)
-import mediapipe
-print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
 try:
     import cv2
     print("opencv:", cv2.__version__)
 except Exception as e:
     print("opencv: not available:", e)
+import mediapipe
+print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
 PY
 
 # -----------------------------
@@ -142,6 +153,7 @@ civit_download() {
     "${header[@]}" \
     -o "$out" "$url"
 
+  # If we got HTML (login page), delete it so you dont think its a model
   if file "$out" | grep -qi "HTML"; then
     echo "[civitai] ERROR: got HTML instead of model (token missing/invalid/gated). Removing $out"
     rm -f "$out"
@@ -150,8 +162,8 @@ civit_download() {
 }
 
 env_lora_download() {
-  local url_var="$1"
-  local filename="${2:-}"
+  local url_var="$1"      # env var name, e.g. CHAR_LORA_URL
+  local filename="${2:-}" # optional output filename override
   local out_dir="${MODELS_DIR}/loras"
 
   local url="${!url_var:-}"
@@ -162,11 +174,14 @@ env_lora_download() {
 
   mkdir -p "$out_dir"
 
+  # Auto-name from URL if not provided
   if [ -z "$filename" ]; then
     filename="$(basename "${url%%\?*}")"
   fi
 
+  # sanitize spaces just in case
   filename="${filename// /_}"
+
   local out="${out_dir}/${filename}"
 
   echo "[lora] url_var=${url_var}"
@@ -178,10 +193,12 @@ env_lora_download() {
     return 0
   fi
 
+  # Dropbox can be picky; use curl with UA + retries + resume
   curl -L --fail --retry 10 --retry-delay 2 -C - \
     -A "Mozilla/5.0" \
     -o "$out" "$url"
 
+  # Detect HTML instead of a safetensors binary
   if file "$out" | grep -qi "HTML"; then
     echo "[lora] ERROR: got HTML instead of model (Dropbox auth/blocked). Removing $out"
     rm -f "$out"
@@ -191,7 +208,7 @@ env_lora_download() {
   echo "[lora] done: $(ls -lh "$out" | awk '{print $5, $9}')"
 }
 
-# Install node requirements but never allow torch stack / numpy / transformers to be changed.
+# Install node requirements but never allow torch stack / numpy / transformers / tokenizers / protobuf / opencv to be changed.
 safe_pip_install_req() {
   local req="$1"
   [ -f "$req" ] || return 0
@@ -200,7 +217,7 @@ safe_pip_install_req() {
   tmpreq="$(mktemp)"
   grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python)([<=> ].*)?$' "$req" > "$tmpreq" || true
 
-  python3 -m pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
   rm -f "$tmpreq"
 }
 
@@ -278,13 +295,65 @@ echo "[models] Downloads completed."
 REPO_CACHE="${PERSIST_DIR}/_repos"
 mkdir -p "$REPO_CACHE"
 
-# -----------------------------
-# Git helper: clone/update + symlink into custom_nodes (non-fatal)
-# -----------------------------
+# Extra bbox models repo
+BBOX_DIR="${MODELS_DIR}/ultralytics/bbox"
+ULTRA_REPO_DIR="${REPO_CACHE}/IIIIIIIII_ZIT_V3_Ultralytics"
+UPDATE_MODELS="${UPDATE_MODELS:-0}"
+BBOX_MARK="${PERSIST_DIR}/.bbox-models-copied"
+
+if [ ! -d "${ULTRA_REPO_DIR}/.git" ]; then
+  echo "[bbox] cloning ultralytics model repo (one-time)..."
+  rm -rf "${ULTRA_REPO_DIR}"
+  git -c http.extraHeader= -c credential.helper= clone --depth 1 --progress \
+    "https://github.com/rvspromotion-glitch/IIIIIIIII_ZIT_V3_Ultralytics.git" \
+    "${ULTRA_REPO_DIR}" || true
+elif [ "$UPDATE_MODELS" = "1" ]; then
+  echo "[bbox] updating ultralytics model repo..."
+  git -C "${ULTRA_REPO_DIR}" pull --rebase || true
+else
+  echo "[bbox] using cached ultralytics model repo (no pull)"
+fi
+
+if [ ! -f "$BBOX_MARK" ] || [ "$UPDATE_MODELS" = "1" ]; then
+  echo "[bbox] syncing .pt files into ${BBOX_DIR}..."
+  find "${ULTRA_REPO_DIR}" -type f -name "*.pt" -exec cp -f {} "${BBOX_DIR}/" \; || true
+  touch "$BBOX_MARK"
+fi
+
+# Node pack repo (symlink into custom_nodes)
+ZIT_REPO_DIR="${REPO_CACHE}/IIIIIIII_ZIT_V3"
 UPDATE_NODES="${UPDATE_NODES:-0}"
-INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
-FORCE_NODE_REQS="${FORCE_NODE_REQS:-0}"
 REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
+
+if [ ! -d "${ZIT_REPO_DIR}/.git" ]; then
+  echo "[nodes] cloning node pack into cache (one-time)..."
+  rm -rf "${ZIT_REPO_DIR}"
+  git -c http.extraHeader= -c credential.helper= clone --depth 1 --shallow-submodules --recurse-submodules --progress \
+    "https://github.com/rvspromotion-glitch/IIIIIIII_ZIT_V3.git" \
+    "${ZIT_REPO_DIR}" || true
+  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive --depth 1 || true
+elif [ "$UPDATE_NODES" = "1" ]; then
+  echo "[nodes] updating cached node pack..."
+  git -C "${ZIT_REPO_DIR}" pull --rebase || true
+  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive || true
+else
+  echo "[nodes] using cached node pack (no pull)"
+fi
+
+echo "[nodes] creating symlinks in custom_nodes (node pack)..."
+for dir in "${ZIT_REPO_DIR}"/*; do
+  [ -d "$dir" ] || continue
+  node_name="$(basename "$dir")"
+  case "$node_name" in .git|.github|__pycache__) continue ;; esac
+  ln -sfn "$dir" "${CUSTOM_NODES}/${node_name}"
+done
+
+# -----------------------------
+# Custom nodes from your list (+ manager + extra screenshot nodes)
+# -----------------------------
+echo "==================================="
+echo "Installing custom nodes (cached)"
+echo "==================================="
 
 clone_or_update() {
   local name="$1"
@@ -294,12 +363,12 @@ clone_or_update() {
   if [ ! -d "${dest}/.git" ]; then
     echo "[nodes] cloning ${name}..."
     rm -rf "$dest"
-    if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 --progress "$url" "$dest"; then
+    if ! git -c http.extraHeader= -c credential.helper= clone --depth 1 --progress "$url" "$dest"; then
       echo "[nodes] WARNING: failed to clone ${name}, skipping"
       rm -rf "$dest"
       return 0
     fi
-  elif [ "$UPDATE_NODES" = "1" ]; then
+  elif [ "${UPDATE_NODES}" = "1" ]; then
     echo "[nodes] updating ${name}..."
     git -C "$dest" pull --rebase || true
   else
@@ -309,14 +378,10 @@ clone_or_update() {
   ln -sfn "$dest" "${CUSTOM_NODES}/${name}"
 }
 
-echo "==================================="
-echo "Installing custom nodes + Manager"
-echo "==================================="
+# ComfyUI Manager (needed for in-UI installs)
+clone_or_update "ComfyUI-Manager"            "https://github.com/ltdrdata/ComfyUI-Manager.git"
 
-# --- ComfyUI-Manager (adds the Manager button/UI) ---
-clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.git"
-
-# --- Your node list ---
+# From your original list
 clone_or_update "ComfyUI-Impact-Pack"        "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
 clone_or_update "ComfyUI-Impact-Subpack"     "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
 clone_or_update "ComfyUI-KJNodes"            "https://github.com/kijai/ComfyUI-KJNodes.git"
@@ -330,9 +395,15 @@ clone_or_update "ComfyUI-Custom-Scripts"     "https://github.com/pythongosssss/C
 clone_or_update "comfyui_controlnet_aux"     "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"              "https://github.com/rgthree/rgthree-comfy.git"
 
+# Extra nodes from your screenshot
+clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
+clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
+clone_or_update "DJZ-Nodes"                   "https://github.com/MushroomFleet/DJZ-Nodes.git"
+
 # Install node requirements once (constrained)
+INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
-  if [ "$FORCE_NODE_REQS" = "1" ] || [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
+  if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
     echo "[pip] Installing node requirements (once, constrained)..."
     for dir in "${REPO_CACHE}"/*; do
       [ -d "$dir" ] || continue
@@ -348,12 +419,12 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   fi
 fi
 
-echo "[nodes] Installed nodes in custom_nodes:"
-ls -la "$CUSTOM_NODES" || true
+echo "[nodes] Done."
 
-# Final safety
-python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" "mediapipe==0.10.14" "opencv-python<4.12" || true
+# Final safety (re-assert pins)
+pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  "numpy<2" "protobuf<5" "opencv-python<4.12" "mediapipe==0.10.14" \
+  "transformers==4.45.1" "tokenizers==0.19.1" || true
 
 # -----------------------------
 # Start JupyterLab
