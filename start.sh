@@ -39,7 +39,7 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$PIP_CACHE_DIR"
 
 # -----------------------------
-# Git: non-interactive + avoid inherited auth headers/helpers
+# git: non-interactive
 # -----------------------------
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/true
@@ -47,9 +47,9 @@ git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null
 git config --global --unset-all credential.helper 2>/dev/null || true
 
 # -----------------------------
-# Hard constraints (stable base)
-# - Keep numpy<2 to avoid compiled-wheel crashes
-# - Keep opencv below 4.12 to avoid numpy>=2 pull
+# Hard constraints (stable stack)
+# - keep numpy < 2 to avoid compiled wheel crashes
+# - keep opencv below 4.12 to avoid numpy>=2 pulls
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -84,23 +84,22 @@ python3 -m pip install -q --upgrade --prefer-binary \
   "sageattention" || true
 
 # -----------------------------
-# Extra deps (what ComfyUI-Manager "try fix" installed)
-# - Needed for WanVideoWrapper + audio helpers + misc nodes
+# Extra deps (mirrors what "Try Fix" installed + video helpers)
+# These are needed for WanVideoWrapper / KJNodes / audio/video helpers.
 # -----------------------------
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "ftfy" \
   "einops" \
   "diffusers>=0.33.0" \
   "accelerate>=1.2.1" \
-  "tqdm>=4.62.0" \
   "librosa>=0.9.0" \
+  "tqdm>=4.62.0" \
   "numba" \
   "soundfile" \
-  "sentencepiece>=0.2.0" || true
-
-# Optional but often useful for video nodes (won't break if missing wheels)
-python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "ffmpeg-python" "av" "decord" || true
+  "sentencepiece>=0.2.0" \
+  "ffmpeg-python" \
+  "av" \
+  "decord" || true
 
 echo "[debug] Versions:"
 python3 - <<'PY'
@@ -119,35 +118,18 @@ try:
 except Exception as e:
     print("tokenizers: error:", e)
 try:
-    import accelerate
-    print("accelerate:", accelerate.__version__)
-except Exception as e:
-    print("accelerate: error:", e)
-try:
-    import diffusers
-    print("diffusers:", diffusers.__version__)
-except Exception as e:
-    print("diffusers: error:", e)
-try:
-    import librosa
-    print("librosa:", librosa.__version__)
-except Exception as e:
-    print("librosa: error:", e)
-try:
-    import soundfile
-    print("soundfile:", soundfile.__version__)
-except Exception as e:
-    print("soundfile: error:", e)
-try:
     import cv2
     print("opencv:", cv2.__version__)
 except Exception as e:
     print("opencv: not available:", e)
-try:
-    import mediapipe
-    print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
-except Exception as e:
-    print("mediapipe: error:", e)
+import mediapipe
+print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
+for mod in ["ftfy","einops","diffusers","accelerate","librosa","tqdm","numba","soundfile","sentencepiece"]:
+    try:
+        m = __import__(mod)
+        print(mod, "ok", getattr(m, "__version__", ""))
+    except Exception as e:
+        print(mod, "FAILED", e)
 PY
 
 # -----------------------------
@@ -210,8 +192,8 @@ civit_download() {
 }
 
 env_lora_download() {
-  local url_var="$1"      # env var name, e.g. CHAR_LORA_URL
-  local filename="${2:-}" # optional output filename override
+  local url_var="$1"
+  local filename="${2:-}"
   local out_dir="${MODELS_DIR}/loras"
 
   local url="${!url_var:-}"
@@ -331,10 +313,10 @@ wait
 echo "[models] Downloads completed."
 
 # -----------------------------
-# Custom nodes: clone/update + symlink (cached)
+# Custom nodes: clone/update + symlink (cached, non-fatal)
 # -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
-mkdir -p "$REPO_CACHE"
+mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
 
 UPDATE_NODES="${UPDATE_NODES:-0}"
 INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
@@ -369,7 +351,6 @@ echo "Installing custom nodes + Manager"
 echo "==================================="
 
 clone_or_update "ComfyUI-Manager"              "https://github.com/ltdrdata/ComfyUI-Manager.git"
-
 clone_or_update "ComfyUI-Impact-Pack"          "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
 clone_or_update "ComfyUI-Impact-Subpack"       "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
 clone_or_update "ComfyUI-KJNodes"              "https://github.com/kijai/ComfyUI-KJNodes.git"
@@ -383,6 +364,7 @@ clone_or_update "ComfyUI-Custom-Scripts"       "https://github.com/pythongosssss
 clone_or_update "comfyui_controlnet_aux"       "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"                "https://github.com/rgthree/rgthree-comfy.git"
 
+# extra repos you added earlier
 clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
 clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
@@ -404,10 +386,9 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   fi
 fi
 
-echo "[nodes] Installed custom_nodes:"
-ls -la "$CUSTOM_NODES" || true
+echo "[nodes] Done."
 
-# Final safety (re-assert pins)
+# Final safety
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" "protobuf<5" "opencv-python<4.12" "mediapipe==0.10.14" \
   "transformers==4.39.3" "tokenizers==0.15.2" || true
