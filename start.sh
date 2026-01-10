@@ -337,7 +337,6 @@ clone_or_update "ComfyUI-WanVideoWrapper"      "https://github.com/kijai/ComfyUI
 clone_or_update "ComfyUI-GGUF"                 "https://github.com/city96/ComfyUI-GGUF.git"
 clone_or_update "ComfyUI_essentials"           "https://github.com/cubiq/ComfyUI_essentials.git"
 clone_or_update "a-person-mask-generator"      "https://github.com/djbielejeski/a-person-mask-generator.git"
-clone_or_update "ComfyUI-VFI"                  "https://github.com/Fannovel16/ComfyUI-VFI.git"
 clone_or_update "ComfyUI-Custom-Scripts"       "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
 clone_or_update "comfyui_controlnet_aux"       "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"                "https://github.com/rgthree/rgthree-comfy.git"
