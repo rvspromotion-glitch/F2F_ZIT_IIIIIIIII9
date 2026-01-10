@@ -16,6 +16,7 @@ BAKED_DIR="${COMFYUI_BAKED:-/opt/ComfyUI}"
 
 mkdir -p "$(dirname "$COMFY_DIR")" "$PERSIST_DIR"
 
+# If ComfyUI is missing but baked exists, restore it (RunPod mount scenario)
 if [ ! -f "${COMFY_DIR}/main.py" ] && [ -f "${BAKED_DIR}/main.py" ]; then
   echo "[setup] Restoring ComfyUI from ${BAKED_DIR} -> ${COMFY_DIR} (mount detected)"
   rm -rf "${COMFY_DIR}"
@@ -29,19 +30,25 @@ fi
 
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
-export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
-export PIP_DISABLE_PIP_VERSION_CHECK=1
-mkdir -p "$PIP_CACHE_DIR"
-
+# -----------------------------
+# Non-interactive git
+# -----------------------------
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/true
 git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null || true
 git config --global --unset-all credential.helper 2>/dev/null || true
 
-echo "[debug] python exe: $(python3 -c 'import sys; print(sys.executable)')"
+# -----------------------------
+# Speed: persistent pip cache
+# -----------------------------
+export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+mkdir -p "$PIP_CACHE_DIR"
+
+echo "[debug] python: $(python3 -c 'import sys; print(sys.executable)')"
 
 # -----------------------------
-# Minimal constraints (stop numpy2 and opencv4.12+ drift)
+# Critical constraints
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -53,15 +60,15 @@ EOF
 echo "[pip] constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Enforce constraints first
+# Enforce minimal constraints first
 python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" "numpy<2" || true
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" "opencv-python<4.12" "protobuf<5" || true
 
 # -----------------------------
-# Install the same deps Manager "Try Fix" installed, but using the same python env
+# Install deps (Manager-style) + keep sageattention
 # -----------------------------
 echo "==================================="
-echo "Installing node deps"
+echo "Installing python deps"
 echo "==================================="
 
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
@@ -75,13 +82,20 @@ python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   soundfile \
   sentencepiece || true
 
-# Optional helpers for some video nodes (non fatal)
+# Optional helpers for video nodes (non fatal)
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   ffmpeg-python av decord || true
 
+# Keep sageattention (but make sure it does NOT bring comfy_kitchen)
+python3 -m pip install -q --upgrade --prefer-binary sageattention || true
+
+# HARD SAFETY:
+# comfy_kitchen breaks older torch (torch.library.custom_op missing) and causes restart loop.
+# We keep sageattention, but we forcibly remove comfy_kitchen if it got pulled as a dependency.
+python3 -m pip uninstall -y comfy-kitchen comfy_kitchen comfy-kitchen-cuda comfy_kitchen_cuda >/dev/null 2>&1 || true
+
 # -----------------------------
-# Fix torchaudio ABI mismatch (DJZ, WanVideoWrapper etc)
-# Use torch version WITHOUT +cuXXX suffix
+# Fix torchaudio ABI mismatch (DJZ / WanVideoWrapper)
 # -----------------------------
 echo "==================================="
 echo "Aligning torchvision and torchaudio to torch"
@@ -115,10 +129,9 @@ echo "[torch] torch=${TORCH_VERSION}"
 echo "[torch] cuda=${CUDA_VER}"
 echo "[torch] index=${PT_INDEX}"
 
-# Remove any mismatched builds
 python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
 
-# Reinstall matching builds. If this fails, do NOT crash the container.
+# Do NOT crash the container if wheels are missing
 if [ "$PT_INDEX" = "cpu" ]; then
   python3 -m pip install -q --upgrade --no-deps \
     "torchvision==${TORCH_VERSION}" \
@@ -132,7 +145,8 @@ else
 fi
 
 python3 - <<'PY' || true
-import torch, numpy
+import sys, torch, numpy
+print("python:", sys.executable)
 print("torch:", torch.__version__)
 print("numpy:", numpy.__version__)
 try:
@@ -141,6 +155,9 @@ try:
 except Exception as e:
   print("torchaudio import failed:", e)
 PY
+
+# One more safety pass: comfy_kitchen can get reintroduced by later installs
+python3 -m pip uninstall -y comfy-kitchen comfy_kitchen comfy-kitchen-cuda comfy_kitchen_cuda >/dev/null 2>&1 || true
 
 # -----------------------------
 # Helpers
@@ -215,7 +232,7 @@ env_lora_download() {
 }
 
 # -----------------------------
-# Model directories + downloads (unchanged)
+# Model directories + downloads
 # -----------------------------
 mkdir -p \
   "${MODELS_DIR}/sams" \
@@ -328,7 +345,10 @@ clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/Co
 clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
-# Reassert constraints at end
+# Final safety: remove comfy_kitchen again (keep sageattention)
+python3 -m pip uninstall -y comfy-kitchen comfy_kitchen comfy-kitchen-cuda comfy_kitchen_cuda >/dev/null 2>&1 || true
+
+# Reassert constraints
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" "opencv-python<4.12" "protobuf<5" || true
 
