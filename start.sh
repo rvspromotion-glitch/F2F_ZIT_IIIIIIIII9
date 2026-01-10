@@ -14,7 +14,7 @@ BAKED_DIR="${COMFYUI_BAKED:-/opt/ComfyUI}"
 
 mkdir -p "$(dirname "$COMFY_DIR")" "$PERSIST_DIR"
 
-# If ComfyUI is missing but baked exists, restore it (RunPod mount scenario)
+# Restore baked ComfyUI if /workspace is an empty mount
 if [ ! -f "${COMFY_DIR}/main.py" ] && [ -f "${BAKED_DIR}/main.py" ]; then
   echo "[setup] Restoring ComfyUI from ${BAKED_DIR} -> ${COMFY_DIR} (mount detected)"
   rm -rf "${COMFY_DIR}"
@@ -29,7 +29,7 @@ fi
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
 # -----------------------------
-# Git: non-interactive
+# Git: non-interactive (avoid auth prompts)
 # -----------------------------
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/true
@@ -37,18 +37,14 @@ git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null
 git config --global --unset-all credential.helper 2>/dev/null || true
 
 # -----------------------------
-# Speed: persistent pip cache
+# pip cache
 # -----------------------------
 export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$PIP_CACHE_DIR"
 
 # -----------------------------
-# Hard pins to keep the environment stable
-# - numpy<2 (many wheels still expect numpy1)
-# - opencv<4.12 (opencv 4.12 wants numpy>=2)
-# - transformers/tokenizers pinned (avoid pytree mismatch on older torch)
-# - keep sageattention
+# Hard pins (stability)
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -66,13 +62,13 @@ EOF
 echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Nuke problematic packages that crash ComfyUI on older torch (custom_op)
+# Remove packages that can brick startup on older torch (custom_op)
 python3 -m pip uninstall -y comfy_kitchen >/dev/null 2>&1 || true
 
-# If opencv 4.12 got preinstalled, remove it first so it can't fight numpy<2
+# Remove opencv if too new (4.12+ pulls numpy2)
 python3 -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
 
-# Reinstall pinned core deps (force)
+# Force core pins
 python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" \
   "protobuf<5" \
@@ -85,123 +81,63 @@ python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONST
   "sageattention" || true
 
 # -----------------------------
-# Install the same "Try Fix" deps (but with our constraints active)
-# -----------------------------
-echo "==================================="
-echo "Installing helper deps"
-echo "==================================="
-
-python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  ftfy \
-  "accelerate>=1.2.1" \
-  einops \
-  "diffusers>=0.33.0" \
-  "librosa>=0.9.0" \
-  "tqdm>=4.62.0" \
-  numba \
-  soundfile || true
-
-# Optional video helpers (non-fatal)
-python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  ffmpeg-python av decord sentencepiece || true
-
-# -----------------------------
-# Align torchvision + torchaudio to the installed torch (ABI-safe)
-# IMPORTANT: torchvision version is NOT equal to torch version.
-# For torch 2.1.1 -> torchvision 0.16.1, torchaudio 2.1.1
+# Align torchvision + torchaudio to installed torch (ABI-safe)
+# Torch 2.1.1 -> torchvision 0.16.1, torchaudio 2.1.1
 # -----------------------------
 echo "==================================="
 echo "Aligning torchvision and torchaudio to torch"
 echo "==================================="
 
-python3 - <<'PY'
-import re, torch
-torch_full = torch.__version__              # e.g. 2.1.1+cu121
-torch_base = torch_full.split("+")[0]       # e.g. 2.1.1
-cuda = torch.version.cuda or ""             # e.g. 12.1
-print(f"[torch] torch_full={torch_full}")
-print(f"[torch] torch_base={torch_base}")
-print(f"[torch] cuda={cuda}")
-
-# Map torch -> torchvision (common pairs)
-tv_map = {
-  "2.1.0": "0.16.0",
-  "2.1.1": "0.16.1",
-  "2.2.0": "0.17.0",
-  "2.2.1": "0.17.1",
-  "2.3.0": "0.18.0",
-  "2.3.1": "0.18.1",
-  "2.4.0": "0.19.0",
-  "2.4.1": "0.19.1",
-  "2.5.0": "0.20.0",
-  "2.5.1": "0.20.1",
-}
-
-tv = tv_map.get(torch_base)
-if not tv:
-  # Best effort: keep it running rather than crashing start.sh
-  print(f"[torch] WARNING: unknown torch_base={torch_base}, skipping torchvision/torchaudio alignment.")
-  raise SystemExit(0)
-
-# Determine wheel index (cu121/cpu/etc)
-pt_index = "cpu"
-if cuda.startswith("12.1"):
-  pt_index = "cu121"
-elif cuda.startswith("11.8"):
-  pt_index = "cu118"
-elif cuda.startswith("12.4"):
-  pt_index = "cu124"
-elif cuda.startswith("12.8"):
-  pt_index = "cu128"
-
-print(f"[torch] torchvision={tv}")
-print(f"[torch] torchaudio={torch_base}")
-print(f"[torch] index={pt_index}")
-
-print(tv)
-print(torch_base)
-print(pt_index)
-PY
-
-TV_VER="$(python3 - <<'PY'
+TORCH_FULL="$(python3 - <<'PY'
 import torch
-torch_base = torch.__version__.split("+")[0]
-tv_map = {
-  "2.1.0": "0.16.0",
-  "2.1.1": "0.16.1",
-  "2.2.0": "0.17.0",
-  "2.2.1": "0.17.1",
-  "2.3.0": "0.18.0",
-  "2.3.1": "0.18.1",
-  "2.4.0": "0.19.0",
-  "2.4.1": "0.19.1",
-  "2.5.0": "0.20.0",
-  "2.5.1": "0.20.1",
-}
-print(tv_map.get(torch_base, ""))
+print(torch.__version__)
 PY
 )"
-TORCH_BASE="$(python3 - <<'PY'
-import torch
-print(torch.__version__.split("+")[0])
-PY
-)"
+TORCH_BASE="${TORCH_FULL%%+*}"
+
 CUDA_VER="$(python3 - <<'PY'
 import torch
 print(torch.version.cuda or "")
 PY
 )"
 
+TV_VER="$(python3 - <<'PY'
+import torch
+tb = torch.__version__.split("+")[0]
+m = {
+  "2.1.0":"0.16.0",
+  "2.1.1":"0.16.1",
+  "2.2.0":"0.17.0",
+  "2.2.1":"0.17.1",
+  "2.3.0":"0.18.0",
+  "2.3.1":"0.18.1",
+  "2.4.0":"0.19.0",
+  "2.4.1":"0.19.1",
+  "2.5.0":"0.20.0",
+  "2.5.1":"0.20.1",
+}
+print(m.get(tb,""))
+PY
+)"
+
 PT_INDEX="cpu"
-if [[ "$CUDA_VER" == 12.1* ]]; then PT_INDEX="cu121"; fi
-if [[ "$CUDA_VER" == 11.8* ]]; then PT_INDEX="cu118"; fi
-if [[ "$CUDA_VER" == 12.4* ]]; then PT_INDEX="cu124"; fi
-if [[ "$CUDA_VER" == 12.8* ]]; then PT_INDEX="cu128"; fi
+case "$CUDA_VER" in
+  11.8*) PT_INDEX="cu118" ;;
+  12.1*) PT_INDEX="cu121" ;;
+  12.4*) PT_INDEX="cu124" ;;
+  12.8*) PT_INDEX="cu128" ;;
+  "")    PT_INDEX="cpu" ;;
+  *)     PT_INDEX="cpu" ;;
+esac
+
+echo "[torch] torch_full=${TORCH_FULL}"
+echo "[torch] torch_base=${TORCH_BASE}"
+echo "[torch] cuda=${CUDA_VER}"
+echo "[torch] torchvision=${TV_VER}"
+echo "[torch] index=${PT_INDEX}"
 
 if [ -n "${TV_VER}" ]; then
-  echo "[torch] installing torchvision==${TV_VER}+${PT_INDEX} torchaudio==${TORCH_BASE}+${PT_INDEX}"
   python3 -m pip uninstall -y torchvision torchaudio >/dev/null 2>&1 || true
-
   if [ "$PT_INDEX" = "cpu" ]; then
     python3 -m pip install -q --upgrade --no-deps \
       "torchvision==${TV_VER}" \
@@ -213,23 +149,43 @@ if [ -n "${TV_VER}" ]; then
       "torchaudio==${TORCH_BASE}+${PT_INDEX}" \
       --index-url "https://download.pytorch.org/whl/${PT_INDEX}" || true
   fi
+else
+  echo "[torch] WARNING: unknown torch version mapping, skipping torchvision install"
 fi
 
-# Do NOT import torchvision here (can trigger transformers/onnx paths and fail the script)
-python3 - <<'PY' || true
-import torch, numpy
-print("[debug] torch:", torch.__version__)
-print("[debug] cuda :", torch.version.cuda)
-print("[debug] numpy:", numpy.__version__)
-try:
-  import torchaudio
-  print("[debug] torchaudio:", torchaudio.__version__)
-except Exception as e:
-  print("[debug] torchaudio import failed:", e)
-PY
+# -----------------------------
+# SAFE install ComfyUI requirements (filtered)
+# (ComfyUI prompt said: pip install -r requirements.txt)
+# We do it, but block torch stack + comfy_kitchen + your pinned libs.
+# -----------------------------
+safe_install_comfy_requirements() {
+  local req="${COMFY_DIR}/requirements.txt"
+  [ -f "$req" ] || return 0
+
+  echo "==================================="
+  echo "Installing ComfyUI requirements (safe)"
+  echo "==================================="
+
+  local tmpreq
+  tmpreq="$(mktemp)"
+
+  # Filter out packages that must never be changed here
+  grep -viE '^(torch|torchvision|torchaudio|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
+    "$req" > "$tmpreq" || true
+
+  python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  rm -f "$tmpreq"
+}
+
+# Some common runtime deps that Manager "Try Fix" often installs
+python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  ftfy einops "tqdm>=4.62.0" "accelerate>=1.2.1" "diffusers>=0.33.0" \
+  "librosa>=0.9.0" numba soundfile ffmpeg-python av decord || true
+
+safe_install_comfy_requirements
 
 # -----------------------------
-# Helpers
+# Helpers: models
 # -----------------------------
 download() {
   local url="$1"
@@ -300,22 +256,8 @@ env_lora_download() {
   fi
 }
 
-# Install node requirements but never allow torch stack / numpy / transformers to be changed.
-safe_pip_install_req() {
-  local req="$1"
-  [ -f "$req" ] || return 0
-
-  local tmpreq
-  tmpreq="$(mktemp)"
-  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python|opencv-contrib-python)([<=> ].*)?$' \
-    "$req" > "$tmpreq" || true
-
-  python3 -m pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
-  rm -f "$tmpreq"
-}
-
 # -----------------------------
-# Model directories
+# Model directories + downloads (as in your working template)
 # -----------------------------
 mkdir -p \
   "${MODELS_DIR}/sams" \
@@ -329,9 +271,6 @@ mkdir -p \
 
 chmod -R 777 "${MODELS_DIR}/loras" || true
 
-# -----------------------------
-# Model downloads (parallel batches)
-# -----------------------------
 echo "[models] Downloading required models (parallel batches)..."
 
 download "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth" \
@@ -379,9 +318,9 @@ wait
 
 echo "[models] Downloads completed."
 
-# =============================
-# Custom Nodes: clone + install (cached, non-fatal)
-# =============================
+# -----------------------------
+# Custom nodes: clone cached + safe requirements
+# -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
 mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
 
@@ -412,14 +351,22 @@ clone_or_update() {
   ln -sfn "$dest" "${CUSTOM_NODES}/${name}"
 }
 
+safe_pip_install_req() {
+  local req="$1"
+  [ -f "$req" ] || return 0
+  local tmpreq
+  tmpreq="$(mktemp)"
+  grep -viE '^(torch|torchvision|torchaudio|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
+    "$req" > "$tmpreq" || true
+  python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  rm -f "$tmpreq"
+}
+
 echo "==================================="
 echo "Installing custom nodes (cached)"
 echo "==================================="
 
-# Manager
 clone_or_update "ComfyUI-Manager"             "https://github.com/ltdrdata/ComfyUI-Manager.git"
-
-# Your list
 clone_or_update "ComfyUI-Impact-Pack"         "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
 clone_or_update "ComfyUI-Impact-Subpack"      "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
 clone_or_update "ComfyUI-KJNodes"             "https://github.com/kijai/ComfyUI-KJNodes.git"
@@ -431,17 +378,41 @@ clone_or_update "a-person-mask-generator"     "https://github.com/djbielejeski/a
 clone_or_update "ComfyUI-Custom-Scripts"      "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
 clone_or_update "comfyui_controlnet_aux"      "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"               "https://github.com/rgthree/rgthree-comfy.git"
-
-# Extra nodes you added in screenshot
-# RIFE VFI comes from Frame-Interpolation in practice
 clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
 clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                   "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
-# Install requirements once (constrained)
+# Patch WanVideoWrapper so audio modules don't block the whole extension
+WAN_DIR="${CUSTOM_NODES}/ComfyUI-WanVideoWrapper"
+if [ -d "$WAN_DIR" ]; then
+  echo "[patch] Making WanVideoWrapper audio modules optional (so non-audio nodes still load)"
+  # Turn the two known failing modules into optional=True if referenced in __init__.py
+  # (idempotent)
+  python3 - <<'PY' || true
+import os, re
+p = "/workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper/__init__.py"
+if not os.path.exists(p):
+    raise SystemExit(0)
+s = open(p, "r", encoding="utf-8").read()
+orig = s
+
+# Make nodes_lt_audio / nodes_audio_encoder optional if they are registered
+for mod in ["nodes_lt_audio", "nodes_audio_encoder"]:
+    # patterns like: register_nodes("nodes_lt_audio", ..., optional=False)
+    s = re.sub(rf'(register_nodes\(\s*["\']{re.escape(mod)}["\'].*?optional\s*=\s*)False',
+               r"\g<1>True", s)
+
+# Some repos keep a list and loop; we also allow missing imports by wrapping import in try
+# If no changes were made above, do nothing.
+if s != orig:
+    open(p, "w", encoding="utf-8").write(s)
+PY
+fi
+
+# Install node requirements once (safe)
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
-    echo "[pip] Installing node requirements (once, constrained)..."
+    echo "[pip] Installing node requirements (once, safe)..."
     for dir in "${REPO_CACHE}"/*; do
       [ -d "$dir" ] || continue
       req="${dir}/requirements.txt"
@@ -456,19 +427,12 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   fi
 fi
 
-# Re-assert pins at end (in case any req tried to move them)
+# Re-assert pins at end
 python3 -m pip uninstall -y comfy_kitchen >/dev/null 2>&1 || true
 python3 -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
-
 python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" \
-  "protobuf<5" \
-  "opencv-python<4.12" \
-  "opencv-contrib-python<4.12" \
-  "transformers==4.39.3" \
-  "tokenizers==0.15.2" \
-  "mediapipe==0.10.14" \
-  "sageattention"
+  "numpy<2" "protobuf<5" "opencv-python<4.12" "opencv-contrib-python<4.12" \
+  "transformers==4.39.3" "tokenizers==0.15.2" "mediapipe==0.10.14" "sageattention" || true
 
 echo "[setup] Done."
 
