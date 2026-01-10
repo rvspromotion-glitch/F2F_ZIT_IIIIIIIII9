@@ -326,6 +326,47 @@ clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" "opencv-python<4.12" "protobuf<5" || true
 
+python3 - <<'PY'
+import torch
+print(torch.__version__)
+print(torch.version.cuda or "")
+PY
+
+TORCH_VERSION="$(python3 - <<'PY'
+import torch
+print(torch.__version__)
+PY
+)"
+CUDA_VER="$(python3 - <<'PY'
+import torch
+print(torch.version.cuda or "")
+PY
+)"
+
+PT_INDEX="cpu"
+case "$CUDA_VER" in
+  11.8*) PT_INDEX="cu118" ;;
+  12.1*) PT_INDEX="cu121" ;;
+  12.4*) PT_INDEX="cu124" ;;
+  12.8*) PT_INDEX="cu128" ;;
+  "")    PT_INDEX="cpu" ;;
+  *)     PT_INDEX="cpu" ;;
+esac
+
+python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
+
+if [ "$PT_INDEX" = "cpu" ]; then
+  python3 -m pip install -U --no-deps \
+    "torchvision==${TORCH_VERSION}" \
+    "torchaudio==${TORCH_VERSION}" \
+    --index-url https://download.pytorch.org/whl/cpu
+else
+  python3 -m pip install -U --no-deps \
+    "torchvision==${TORCH_VERSION}" \
+    "torchaudio==${TORCH_VERSION}" \
+    --index-url "https://download.pytorch.org/whl/${PT_INDEX}"
+fi
+
 # -----------------------------
 # Start JupyterLab
 # -----------------------------
