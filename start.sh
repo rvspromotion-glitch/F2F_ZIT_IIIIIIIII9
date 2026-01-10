@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'echo "[fatal] start.sh failed on line $LINENO"; exit 1' ERR
+
 echo "==================================="
 echo "Starting ComfyUI Setup"
 echo "==================================="
@@ -36,10 +38,10 @@ export GIT_ASKPASS=/bin/true
 git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null || true
 git config --global --unset-all credential.helper 2>/dev/null || true
 
+echo "[debug] python exe: $(python3 -c 'import sys; print(sys.executable)')"
+
 # -----------------------------
-# Constraints (only the critical ones)
-# Keep numpy < 2, keep opencv below 4.12 so it does not pull numpy 2.
-# Everything else we let Manager style installs handle.
+# Minimal constraints (stop numpy2 and opencv4.12+ drift)
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -48,49 +50,50 @@ opencv-python<4.12
 protobuf<5
 EOF
 
-echo "[pip] Enforcing minimal constraints:"
+echo "[pip] constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Force numpy < 2 first
+# Enforce constraints first
 python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" "numpy<2" || true
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" "opencv-python<4.12" "protobuf<5" || true
 
 # -----------------------------
-# Install "Try Fix" deps the same way Manager does: uv pip in /usr python
+# Install the same deps Manager "Try Fix" installed, but using the same python env
 # -----------------------------
 echo "==================================="
-echo "Installing Manager style deps (uv pip)"
+echo "Installing node deps"
 echo "==================================="
 
-# Ensure uv exists
-python3 -m pip install -q --upgrade uv || true
-
-# Use the same interpreter pattern shown in your Manager log
-/usr/bin/python3 -m uv pip install ftfy || true
-/usr/bin/python3 -m uv pip install "accelerate>=1.2.1" || true
-/usr/bin/python3 -m uv pip install einops || true
-/usr/bin/python3 -m uv pip install "diffusers>=0.33.0" || true
-/usr/bin/python3 -m uv pip install "librosa>=0.9.0" || true
-/usr/bin/python3 -m uv pip install "tqdm>=4.62.0" || true
-/usr/bin/python3 -m uv pip install numba || true
-/usr/bin/python3 -m uv pip install soundfile || true
-
-# Optional: common extra deps that help video nodes (non fatal)
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "sentencepiece" "ffmpeg-python" "av" "decord" || true
+  ftfy \
+  einops \
+  "diffusers>=0.33.0" \
+  "accelerate>=1.2.1" \
+  "librosa>=0.9.0" \
+  "tqdm>=4.62.0" \
+  numba \
+  soundfile \
+  sentencepiece || true
+
+# Optional helpers for some video nodes (non fatal)
+python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  ffmpeg-python av decord || true
 
 # -----------------------------
-# Fix torchaudio ABI mismatch: torchaudio must match torch exactly
+# Fix torchaudio ABI mismatch (DJZ, WanVideoWrapper etc)
+# Use torch version WITHOUT +cuXXX suffix
 # -----------------------------
 echo "==================================="
 echo "Aligning torchvision and torchaudio to torch"
 echo "==================================="
 
-TORCH_VERSION="$(python3 - <<'PY'
+TORCH_VERSION_FULL="$(python3 - <<'PY'
 import torch
 print(torch.__version__)
 PY
 )"
+TORCH_VERSION="${TORCH_VERSION_FULL%%+*}"
+
 CUDA_VER="$(python3 - <<'PY'
 import torch
 print(torch.version.cuda or "")
@@ -107,12 +110,15 @@ case "$CUDA_VER" in
   *)     PT_INDEX="cpu" ;;
 esac
 
+echo "[torch] torch_full=${TORCH_VERSION_FULL}"
 echo "[torch] torch=${TORCH_VERSION}"
 echo "[torch] cuda=${CUDA_VER}"
-echo "[torch] wheel index=${PT_INDEX}"
+echo "[torch] index=${PT_INDEX}"
 
+# Remove any mismatched builds
 python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
 
+# Reinstall matching builds. If this fails, do NOT crash the container.
 if [ "$PT_INDEX" = "cpu" ]; then
   python3 -m pip install -q --upgrade --no-deps \
     "torchvision==${TORCH_VERSION}" \
@@ -209,7 +215,7 @@ env_lora_download() {
 }
 
 # -----------------------------
-# Model directories
+# Model directories + downloads (unchanged)
 # -----------------------------
 mkdir -p \
   "${MODELS_DIR}/sams" \
@@ -271,7 +277,7 @@ wait
 echo "[models] Downloads completed."
 
 # -----------------------------
-# Custom nodes
+# Custom nodes (cached clone + symlink)
 # -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
 mkdir -p "$REPO_CACHE"
@@ -322,50 +328,9 @@ clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/Co
 clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
-# Reassert minimal constraints at end
+# Reassert constraints at end
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" "opencv-python<4.12" "protobuf<5" || true
-
-python3 - <<'PY'
-import torch
-print(torch.__version__)
-print(torch.version.cuda or "")
-PY
-
-TORCH_VERSION="$(python3 - <<'PY'
-import torch
-print(torch.__version__)
-PY
-)"
-CUDA_VER="$(python3 - <<'PY'
-import torch
-print(torch.version.cuda or "")
-PY
-)"
-
-PT_INDEX="cpu"
-case "$CUDA_VER" in
-  11.8*) PT_INDEX="cu118" ;;
-  12.1*) PT_INDEX="cu121" ;;
-  12.4*) PT_INDEX="cu124" ;;
-  12.8*) PT_INDEX="cu128" ;;
-  "")    PT_INDEX="cpu" ;;
-  *)     PT_INDEX="cpu" ;;
-esac
-
-python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
-
-if [ "$PT_INDEX" = "cpu" ]; then
-  python3 -m pip install -U --no-deps \
-    "torchvision==${TORCH_VERSION}" \
-    "torchaudio==${TORCH_VERSION}" \
-    --index-url https://download.pytorch.org/whl/cpu
-else
-  python3 -m pip install -U --no-deps \
-    "torchvision==${TORCH_VERSION}" \
-    "torchaudio==${TORCH_VERSION}" \
-    --index-url "https://download.pytorch.org/whl/${PT_INDEX}"
-fi
 
 # -----------------------------
 # Start JupyterLab
