@@ -106,7 +106,7 @@ import torch
 print(torch.__version__)
 PY
 )"
-TORCH_VERSION="${TORCH_VERSION_FULL%%+*}"
+TORCH_VERSION="${TORCH_VERSION_FULL%%+*}"   # 2.1.1 from 2.1.1+cu121
 
 CUDA_VER="$(python3 - <<'PY'
 import torch
@@ -131,29 +131,24 @@ echo "[torch] index=${PT_INDEX}"
 
 python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
 
-# Do NOT crash the container if wheels are missing
 if [ "$PT_INDEX" = "cpu" ]; then
-  python3 -m pip install -q --upgrade --no-deps \
-    "torchvision==${TORCH_VERSION}" \
-    "torchaudio==${TORCH_VERSION}" \
-    --index-url "https://download.pytorch.org/whl/cpu" || true
+  INDEX_URL="https://download.pytorch.org/whl/cpu"
 else
-  python3 -m pip install -q --upgrade --no-deps \
-    "torchvision==${TORCH_VERSION}" \
-    "torchaudio==${TORCH_VERSION}" \
-    --index-url "https://download.pytorch.org/whl/${PT_INDEX}" || true
+  INDEX_URL="https://download.pytorch.org/whl/${PT_INDEX}"
 fi
 
-python3 - <<'PY' || true
-import sys, torch, numpy
-print("python:", sys.executable)
+# Install WITHOUT --no-deps so torchvision pulls what it needs,
+# and DO NOT swallow failures because missing torchvision crashes ComfyUI anyway.
+python3 -m pip install -U --prefer-binary \
+  --index-url "$INDEX_URL" \
+  "torchvision==${TORCH_VERSION}" \
+  "torchaudio==${TORCH_VERSION}"
+
+# verify (will fail here instead of later)
+python3 - <<'PY'
+import torch, torchvision
 print("torch:", torch.__version__)
-print("numpy:", numpy.__version__)
-try:
-  import torchaudio
-  print("torchaudio:", torchaudio.__version__)
-except Exception as e:
-  print("torchaudio import failed:", e)
+print("torchvision:", torchvision.__version__)
 PY
 
 # One more safety pass: comfy_kitchen can get reintroduced by later installs
