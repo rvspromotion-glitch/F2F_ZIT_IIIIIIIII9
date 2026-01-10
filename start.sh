@@ -275,12 +275,6 @@ download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_file
   "${MODELS_DIR}/clip/qwen_3_4b.safetensors" &
 wait
 
-civit_download "https://civitai.com/api/download/models/1511445?type=Model&format=SafeTensor" \
-  "${MODELS_DIR}/loras/1511445_Spread i5XL.safetensors" &
-civit_download "https://civitai.com/api/download/models/2435561?type=Model&format=SafeTensor&size=pruned&fp=fp16" \
-  "${MODELS_DIR}/checkpoints/2435561_Photo4_fp16_pruned.safetensors" &
-wait
-
 # -----------------------------
 # Optional character LoRA via env var
 # -----------------------------
@@ -320,33 +314,7 @@ if [ ! -f "$BBOX_MARK" ] || [ "$UPDATE_MODELS" = "1" ]; then
   touch "$BBOX_MARK"
 fi
 
-# Node pack repo (symlink into custom_nodes)
-ZIT_REPO_DIR="${REPO_CACHE}/IIIIIIII_ZIT_V3"
-UPDATE_NODES="${UPDATE_NODES:-0}"
 REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
-
-if [ ! -d "${ZIT_REPO_DIR}/.git" ]; then
-  echo "[nodes] cloning node pack into cache (one-time)..."
-  rm -rf "${ZIT_REPO_DIR}"
-  git -c http.extraHeader= -c credential.helper= clone --depth 1 --shallow-submodules --recurse-submodules --progress \
-    "https://github.com/rvspromotion-glitch/IIIIIIII_ZIT_V3.git" \
-    "${ZIT_REPO_DIR}" || true
-  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive --depth 1 || true
-elif [ "$UPDATE_NODES" = "1" ]; then
-  echo "[nodes] updating cached node pack..."
-  git -C "${ZIT_REPO_DIR}" pull --rebase || true
-  git -C "${ZIT_REPO_DIR}" submodule update --init --recursive || true
-else
-  echo "[nodes] using cached node pack (no pull)"
-fi
-
-echo "[nodes] creating symlinks in custom_nodes (node pack)..."
-for dir in "${ZIT_REPO_DIR}"/*; do
-  [ -d "$dir" ] || continue
-  node_name="$(basename "$dir")"
-  case "$node_name" in .git|.github|__pycache__) continue ;; esac
-  ln -sfn "$dir" "${CUSTOM_NODES}/${node_name}"
-done
 
 # -----------------------------
 # Custom nodes from your list (+ manager + extra screenshot nodes)
@@ -390,7 +358,6 @@ clone_or_update "ComfyUI-WanVideoWrapper"    "https://github.com/kijai/ComfyUI-W
 clone_or_update "ComfyUI-GGUF"               "https://github.com/city96/ComfyUI-GGUF.git"
 clone_or_update "ComfyUI_essentials"         "https://github.com/cubiq/ComfyUI_essentials.git"
 clone_or_update "a-person-mask-generator"    "https://github.com/djbielejeski/a-person-mask-generator.git"
-clone_or_update "ComfyUI-VFI"                "https://github.com/Fannovel16/ComfyUI-VFI.git"
 clone_or_update "ComfyUI-Custom-Scripts"     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
 clone_or_update "comfyui_controlnet_aux"     "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"              "https://github.com/rgthree/rgthree-comfy.git"
