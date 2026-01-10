@@ -45,10 +45,10 @@ export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$PIP_CACHE_DIR"
 
-echo "[debug] python: $(python3 -c 'import sys; print(sys.executable)')"
+echo "[debug] python exe: $(python3 -c 'import sys; print(sys.executable)')"
 
 # -----------------------------
-# Critical constraints
+# Critical constraints (avoid numpy2/opencv drift)
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -60,12 +60,11 @@ EOF
 echo "[pip] constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Enforce minimal constraints first
-python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" "numpy<2" || true
-python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" "opencv-python<4.12" "protobuf<5" || true
+python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" "numpy<2"
+python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" "opencv-python<4.12" "protobuf<5"
 
 # -----------------------------
-# Install deps (Manager-style) + keep sageattention
+# Manager "Try Fix" deps (+ small extras)
 # -----------------------------
 echo "==================================="
 echo "Installing python deps"
@@ -82,20 +81,21 @@ python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   soundfile \
   sentencepiece || true
 
-# Optional helpers for video nodes (non fatal)
+# Optional helpers for video nodes (non-fatal)
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   ffmpeg-python av decord || true
 
-# Keep sageattention (but make sure it does NOT bring comfy_kitchen)
+# Keep sageattention (requested)
 python3 -m pip install -q --upgrade --prefer-binary sageattention || true
 
 # HARD SAFETY:
-# comfy_kitchen breaks older torch (torch.library.custom_op missing) and causes restart loop.
-# We keep sageattention, but we forcibly remove comfy_kitchen if it got pulled as a dependency.
+# comfy_kitchen breaks torch 2.1.1 (missing torch.library.custom_op) and causes restart loops.
 python3 -m pip uninstall -y comfy-kitchen comfy_kitchen comfy-kitchen-cuda comfy_kitchen_cuda >/dev/null 2>&1 || true
 
 # -----------------------------
-# Fix torchaudio ABI mismatch (DJZ / WanVideoWrapper)
+# Align torchvision + torchaudio with torch
+# IMPORTANT: torchvision version is NOT same as torch version.
+# For torch 2.1.1 -> torchvision 0.16.1 (or 0.16.2).
 # -----------------------------
 echo "==================================="
 echo "Aligning torchvision and torchaudio to torch"
@@ -106,7 +106,7 @@ import torch
 print(torch.__version__)
 PY
 )"
-TORCH_VERSION="${TORCH_VERSION_FULL%%+*}"   # 2.1.1 from 2.1.1+cu121
+TORCH_VERSION="${TORCH_VERSION_FULL%%+*}"
 
 CUDA_VER="$(python3 - <<'PY'
 import torch
@@ -124,35 +124,55 @@ case "$CUDA_VER" in
   *)     PT_INDEX="cpu" ;;
 esac
 
-echo "[torch] torch_full=${TORCH_VERSION_FULL}"
-echo "[torch] torch=${TORCH_VERSION}"
-echo "[torch] cuda=${CUDA_VER}"
-echo "[torch] index=${PT_INDEX}"
-
-python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
-
 if [ "$PT_INDEX" = "cpu" ]; then
   INDEX_URL="https://download.pytorch.org/whl/cpu"
 else
   INDEX_URL="https://download.pytorch.org/whl/${PT_INDEX}"
 fi
 
-# Install WITHOUT --no-deps so torchvision pulls what it needs,
-# and DO NOT swallow failures because missing torchvision crashes ComfyUI anyway.
+echo "[torch] torch_full=${TORCH_VERSION_FULL}"
+echo "[torch] torch=${TORCH_VERSION}"
+echo "[torch] cuda=${CUDA_VER}"
+echo "[torch] index=${PT_INDEX}"
+echo "[torch] index_url=${INDEX_URL}"
+
+# Pick torchvision compatible with torch
+TORCHVISION_VERSION=""
+case "$TORCH_VERSION" in
+  2.1.0|2.1.1|2.1.2) TORCHVISION_VERSION="0.16.1" ;;  # safe default for 2.1.x
+  2.2.*)             TORCHVISION_VERSION="0.17.2" ;;
+  2.3.*)             TORCHVISION_VERSION="0.18.1" ;;
+  2.4.*)             TORCHVISION_VERSION="0.19.1" ;;
+  2.5.*)             TORCHVISION_VERSION="0.20.1" ;;
+  *)                 TORCHVISION_VERSION="0.16.1" ;;
+esac
+
+echo "[torch] installing torchvision=${TORCHVISION_VERSION}, torchaudio=${TORCH_VERSION}"
+
+python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
+
 python3 -m pip install -U --prefer-binary \
   --index-url "$INDEX_URL" \
-  "torchvision==${TORCH_VERSION}" \
+  "torchvision==${TORCHVISION_VERSION}" \
   "torchaudio==${TORCH_VERSION}"
 
-# verify (will fail here instead of later)
 python3 - <<'PY'
 import torch, torchvision
 print("torch:", torch.__version__)
 print("torchvision:", torchvision.__version__)
+try:
+    import torchaudio
+    print("torchaudio:", torchaudio.__version__)
+except Exception as e:
+    print("torchaudio import failed:", e)
 PY
 
-# One more safety pass: comfy_kitchen can get reintroduced by later installs
+# Remove comfy_kitchen again (double safety)
 python3 -m pip uninstall -y comfy-kitchen comfy_kitchen comfy-kitchen-cuda comfy_kitchen_cuda >/dev/null 2>&1 || true
+
+# Reassert constraints
+python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  "numpy<2" "opencv-python<4.12" "protobuf<5" || true
 
 # -----------------------------
 # Helpers
@@ -339,7 +359,7 @@ clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/Co
 clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
-# Final safety: remove comfy_kitchen again (keep sageattention)
+# Safety: remove comfy_kitchen again (keep sageattention)
 python3 -m pip uninstall -y comfy-kitchen comfy_kitchen comfy-kitchen-cuda comfy_kitchen_cuda >/dev/null 2>&1 || true
 
 # Reassert constraints
