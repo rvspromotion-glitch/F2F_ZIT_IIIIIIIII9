@@ -9,15 +9,11 @@ COMFY_DIR="${COMFYUI_PATH:-/workspace/ComfyUI}"
 CUSTOM_NODES="${COMFY_DIR}/custom_nodes"
 MODELS_DIR="${COMFY_DIR}/models"
 
-# Persistent RunPod volume (set RUNPOD_VOLUME in template if you want)
 PERSIST_DIR="${RUNPOD_VOLUME:-/workspace/runpod-slim}"
-
-# Optional baked fallback (if /workspace is a mounted empty volume)
 BAKED_DIR="${COMFYUI_BAKED:-/opt/ComfyUI}"
 
 mkdir -p "$(dirname "$COMFY_DIR")" "$PERSIST_DIR"
 
-# If ComfyUI is missing but baked exists, restore it (RunPod mount scenario)
 if [ ! -f "${COMFY_DIR}/main.py" ] && [ -f "${BAKED_DIR}/main.py" ]; then
   echo "[setup] Restoring ComfyUI from ${BAKED_DIR} -> ${COMFY_DIR} (mount detected)"
   rm -rf "${COMFY_DIR}"
@@ -31,105 +27,113 @@ fi
 
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
-# -----------------------------
-# Speed: persistent pip cache
-# -----------------------------
 export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$PIP_CACHE_DIR"
 
-# -----------------------------
-# git: non-interactive
-# -----------------------------
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/true
 git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null || true
 git config --global --unset-all credential.helper 2>/dev/null || true
 
 # -----------------------------
-# Hard constraints (stable stack)
-# - keep numpy < 2 to avoid compiled wheel crashes
-# - keep opencv below 4.12 to avoid numpy>=2 pulls
+# Constraints (only the critical ones)
+# Keep numpy < 2, keep opencv below 4.12 so it does not pull numpy 2.
+# Everything else we let Manager style installs handle.
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
 numpy<2
-protobuf<5
 opencv-python<4.12
-transformers==4.39.3
-tokenizers==0.15.2
-safetensors
-mediapipe==0.10.14
-sageattention
+protobuf<5
 EOF
 
-export PIP_CONSTRAINT="$CONSTRAINTS_FILE"
-
-echo "[pip] Enforcing constraints:"
+echo "[pip] Enforcing minimal constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Hard reset numpy first (prevents torch/compiled wheels from breaking)
-python3 -m pip install -q --upgrade --force-reinstall --prefer-binary "numpy<2" || true
-
-# Install pinned core stack under constraints
-python3 -m pip install -q --upgrade --prefer-binary \
-  -c "$CONSTRAINTS_FILE" \
-  "numpy<2" \
-  "protobuf<5" \
-  "opencv-python<4.12" \
-  "transformers==4.39.3" \
-  "tokenizers==0.15.2" \
-  "safetensors" \
-  "mediapipe==0.10.14" \
-  "sageattention" || true
+# Force numpy < 2 first
+python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" "numpy<2" || true
+python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" "opencv-python<4.12" "protobuf<5" || true
 
 # -----------------------------
-# Extra deps (mirrors what "Try Fix" installed + video helpers)
-# These are needed for WanVideoWrapper / KJNodes / audio/video helpers.
+# Install "Try Fix" deps the same way Manager does: uv pip in /usr python
 # -----------------------------
+echo "==================================="
+echo "Installing Manager style deps (uv pip)"
+echo "==================================="
+
+# Ensure uv exists
+python3 -m pip install -q --upgrade uv || true
+
+# Use the same interpreter pattern shown in your Manager log
+/usr/bin/python3 -m uv pip install ftfy || true
+/usr/bin/python3 -m uv pip install "accelerate>=1.2.1" || true
+/usr/bin/python3 -m uv pip install einops || true
+/usr/bin/python3 -m uv pip install "diffusers>=0.33.0" || true
+/usr/bin/python3 -m uv pip install "librosa>=0.9.0" || true
+/usr/bin/python3 -m uv pip install "tqdm>=4.62.0" || true
+/usr/bin/python3 -m uv pip install numba || true
+/usr/bin/python3 -m uv pip install soundfile || true
+
+# Optional: common extra deps that help video nodes (non fatal)
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "ftfy" \
-  "einops" \
-  "diffusers>=0.33.0" \
-  "accelerate>=1.2.1" \
-  "librosa>=0.9.0" \
-  "tqdm>=4.62.0" \
-  "numba" \
-  "soundfile" \
-  "sentencepiece>=0.2.0" \
-  "ffmpeg-python" \
-  "av" \
-  "decord" || true
+  "sentencepiece" "ffmpeg-python" "av" "decord" || true
 
-echo "[debug] Versions:"
-python3 - <<'PY'
-import sys
-print("python:", sys.version)
+# -----------------------------
+# Fix torchaudio ABI mismatch: torchaudio must match torch exactly
+# -----------------------------
+echo "==================================="
+echo "Aligning torchvision and torchaudio to torch"
+echo "==================================="
+
+TORCH_VERSION="$(python3 - <<'PY'
 import torch
+print(torch.__version__)
+PY
+)"
+CUDA_VER="$(python3 - <<'PY'
+import torch
+print(torch.version.cuda or "")
+PY
+)"
+
+PT_INDEX="cpu"
+case "$CUDA_VER" in
+  11.8*) PT_INDEX="cu118" ;;
+  12.1*) PT_INDEX="cu121" ;;
+  12.4*) PT_INDEX="cu124" ;;
+  12.8*) PT_INDEX="cu128" ;;
+  "")    PT_INDEX="cpu" ;;
+  *)     PT_INDEX="cpu" ;;
+esac
+
+echo "[torch] torch=${TORCH_VERSION}"
+echo "[torch] cuda=${CUDA_VER}"
+echo "[torch] wheel index=${PT_INDEX}"
+
+python3 -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
+
+if [ "$PT_INDEX" = "cpu" ]; then
+  python3 -m pip install -q --upgrade --no-deps \
+    "torchvision==${TORCH_VERSION}" \
+    "torchaudio==${TORCH_VERSION}" \
+    --index-url "https://download.pytorch.org/whl/cpu" || true
+else
+  python3 -m pip install -q --upgrade --no-deps \
+    "torchvision==${TORCH_VERSION}" \
+    "torchaudio==${TORCH_VERSION}" \
+    --index-url "https://download.pytorch.org/whl/${PT_INDEX}" || true
+fi
+
+python3 - <<'PY' || true
+import torch, numpy
 print("torch:", torch.__version__)
-print("cuda:", torch.version.cuda)
-import numpy
 print("numpy:", numpy.__version__)
-import transformers
-print("transformers:", transformers.__version__)
 try:
-    import tokenizers
-    print("tokenizers:", tokenizers.__version__)
+  import torchaudio
+  print("torchaudio:", torchaudio.__version__)
 except Exception as e:
-    print("tokenizers: error:", e)
-try:
-    import cv2
-    print("opencv:", cv2.__version__)
-except Exception as e:
-    print("opencv: not available:", e)
-import mediapipe
-print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
-for mod in ["ftfy","einops","diffusers","accelerate","librosa","tqdm","numba","soundfile","sentencepiece"]:
-    try:
-        m = __import__(mod)
-        print(mod, "ok", getattr(m, "__version__", ""))
-    except Exception as e:
-        print(mod, "FAILED", e)
+  print("torchaudio import failed:", e)
 PY
 
 # -----------------------------
@@ -139,23 +143,16 @@ download() {
   local url="$1"
   local out="$2"
   mkdir -p "$(dirname "$out")"
-
   if [ -f "$out" ] && [ -s "$out" ]; then
     echo "[models] exists: $out"
     return 0
   fi
-
   echo "[models] downloading: $out"
-
   if command -v aria2c >/dev/null 2>&1; then
-    aria2c -c -x 16 -s 16 -k 1M \
-      --allow-overwrite=true \
-      --file-allocation=none \
-      -d "$(dirname "$out")" -o "$(basename "$out")" \
-      "$url"
+    aria2c -c -x 16 -s 16 -k 1M --allow-overwrite=true --file-allocation=none \
+      -d "$(dirname "$out")" -o "$(basename "$out")" "$url"
     return 0
   fi
-
   if command -v curl >/dev/null 2>&1; then
     curl -L --fail --retry 8 --retry-delay 2 -C - -o "$out" "$url"
   else
@@ -167,23 +164,16 @@ civit_download() {
   local url="$1"
   local out="$2"
   mkdir -p "$(dirname "$out")"
-
   if [ -f "$out" ] && [ -s "$out" ]; then
     echo "[civitai] exists: $out"
     return 0
   fi
-
   echo "[civitai] downloading: $out"
-
   local header=()
   if [ -n "${CIVITAI_TOKEN:-}" ]; then
     header+=( -H "Authorization: Bearer ${CIVITAI_TOKEN}" )
   fi
-
-  curl -L --fail --retry 10 --retry-delay 2 -C - \
-    "${header[@]}" \
-    -o "$out" "$url"
-
+  curl -L --fail --retry 10 --retry-delay 2 -C - "${header[@]}" -o "$out" "$url"
   if file "$out" | grep -qi "HTML"; then
     echo "[civitai] ERROR: got HTML instead of model. Removing $out"
     rm -f "$out"
@@ -195,53 +185,27 @@ env_lora_download() {
   local url_var="$1"
   local filename="${2:-}"
   local out_dir="${MODELS_DIR}/loras"
-
   local url="${!url_var:-}"
   if [ -z "$url" ]; then
     echo "[lora] env ${url_var} is empty -> skip"
     return 0
   fi
-
   mkdir -p "$out_dir"
-
   if [ -z "$filename" ]; then
     filename="$(basename "${url%%\?*}")"
   fi
-
   filename="${filename// /_}"
   local out="${out_dir}/${filename}"
-
-  echo "[lora] out=${out}"
-
   if [ -f "$out" ] && [ -s "$out" ]; then
     echo "[lora] exists: $out"
     return 0
   fi
-
-  curl -L --fail --retry 10 --retry-delay 2 -C - \
-    -A "Mozilla/5.0" \
-    -o "$out" "$url"
-
+  curl -L --fail --retry 10 --retry-delay 2 -C - -A "Mozilla/5.0" -o "$out" "$url"
   if file "$out" | grep -qi "HTML"; then
     echo "[lora] ERROR: got HTML instead of model. Removing $out"
     rm -f "$out"
     return 1
   fi
-}
-
-# Install node requirements but never allow core pins to be changed.
-safe_pip_install_req() {
-  local req="$1"
-  [ -f "$req" ] || return 0
-
-  local tmpreq
-  tmpreq="$(mktemp)"
-
-  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python)([<=> ].*)?$' \
-    "$req" > "$tmpreq" || true
-
-  python3 -m pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
-  rm -f "$tmpreq"
 }
 
 # -----------------------------
@@ -259,10 +223,7 @@ mkdir -p \
 
 chmod -R 777 "${MODELS_DIR}/loras" || true
 
-# -----------------------------
-# Model downloads (parallel batches)
-# -----------------------------
-echo "[models] Downloading required models (parallel batches)..."
+echo "[models] Downloading required models..."
 
 download "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth" \
   "${MODELS_DIR}/sams/sam_vit_b_01ec64.pth" &
@@ -304,24 +265,18 @@ civit_download "https://civitai.com/api/download/models/2435561?type=Model&forma
   "${MODELS_DIR}/checkpoints/2435561_Photo4_fp16_pruned.safetensors" &
 wait
 
-# -----------------------------
-# Optional character LoRA via env var
-# -----------------------------
 env_lora_download "CHAR_LORA_URL" &
 wait
 
 echo "[models] Downloads completed."
 
 # -----------------------------
-# Custom nodes: clone/update + symlink (cached, non-fatal)
+# Custom nodes
 # -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
-mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
+mkdir -p "$REPO_CACHE"
 
 UPDATE_NODES="${UPDATE_NODES:-0}"
-INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
-FORCE_NODE_REQS="${FORCE_NODE_REQS:-0}"
-REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 
 clone_or_update() {
   local name="$1"
@@ -363,35 +318,13 @@ clone_or_update "ComfyUI-VFI"                  "https://github.com/Fannovel16/Co
 clone_or_update "ComfyUI-Custom-Scripts"       "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
 clone_or_update "comfyui_controlnet_aux"       "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"                "https://github.com/rgthree/rgthree-comfy.git"
-
-# extra repos you added earlier
 clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
 clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
-if [ "$INSTALL_NODE_REQS" = "1" ]; then
-  if [ "$FORCE_NODE_REQS" = "1" ] || [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
-    echo "[pip] Installing node requirements (once, constrained)..."
-    for dir in "${REPO_CACHE}"/*; do
-      [ -d "$dir" ] || continue
-      req="${dir}/requirements.txt"
-      if [ -f "$req" ]; then
-        echo "  - [pip] $(basename "$dir")/requirements.txt"
-        safe_pip_install_req "$req"
-      fi
-    done
-    touch "$REQ_MARK"
-  else
-    echo "[pip] Node requirements already installed (skip)"
-  fi
-fi
-
-echo "[nodes] Done."
-
-# Final safety
+# Reassert minimal constraints at end
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" "protobuf<5" "opencv-python<4.12" "mediapipe==0.10.14" \
-  "transformers==4.39.3" "tokenizers==0.15.2" || true
+  "numpy<2" "opencv-python<4.12" "protobuf<5" || true
 
 # -----------------------------
 # Start JupyterLab
