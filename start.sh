@@ -47,9 +47,9 @@ git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null
 git config --global --unset-all credential.helper 2>/dev/null || true
 
 # -----------------------------
-# Hard constraints (stable stack)
-# - Force numpy<2 to avoid compiled-wheel crashes
-# - Keep opencv below 4.12 to avoid numpy>=2 pulls
+# Hard constraints (stable base)
+# - Keep numpy<2 to avoid compiled-wheel crashes
+# - Keep opencv below 4.12 to avoid numpy>=2 pull
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -83,12 +83,23 @@ python3 -m pip install -q --upgrade --prefer-binary \
   "mediapipe==0.10.14" \
   "sageattention" || true
 
-# Extra deps commonly needed by video wrappers / diffusers-based nodes
-# (installed explicitly so they don't drag core pins around)
+# -----------------------------
+# Extra deps (what ComfyUI-Manager "try fix" installed)
+# - Needed for WanVideoWrapper + audio helpers + misc nodes
+# -----------------------------
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "einops" "ftfy" "sentencepiece" \
-  "accelerate>=0.28,<1.0" \
-  "diffusers>=0.32,<0.36" \
+  "ftfy" \
+  "einops" \
+  "diffusers>=0.33.0" \
+  "accelerate>=1.2.1" \
+  "tqdm>=4.62.0" \
+  "librosa>=0.9.0" \
+  "numba" \
+  "soundfile" \
+  "sentencepiece>=0.2.0" || true
+
+# Optional but often useful for video nodes (won't break if missing wheels)
+python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "ffmpeg-python" "av" "decord" || true
 
 echo "[debug] Versions:"
@@ -108,17 +119,36 @@ try:
 except Exception as e:
     print("tokenizers: error:", e)
 try:
+    import accelerate
+    print("accelerate:", accelerate.__version__)
+except Exception as e:
+    print("accelerate: error:", e)
+try:
+    import diffusers
+    print("diffusers:", diffusers.__version__)
+except Exception as e:
+    print("diffusers: error:", e)
+try:
+    import librosa
+    print("librosa:", librosa.__version__)
+except Exception as e:
+    print("librosa: error:", e)
+try:
+    import soundfile
+    print("soundfile:", soundfile.__version__)
+except Exception as e:
+    print("soundfile: error:", e)
+try:
     import cv2
     print("opencv:", cv2.__version__)
 except Exception as e:
     print("opencv: not available:", e)
-import mediapipe
-print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
+try:
+    import mediapipe
+    print("mediapipe:", getattr(mediapipe, "__version__", "unknown"), "solutions:", hasattr(mediapipe, "solutions"))
+except Exception as e:
+    print("mediapipe: error:", e)
 PY
-
-if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "[warn] ffmpeg binary not found. Some video nodes may not work."
-fi
 
 # -----------------------------
 # Helpers
@@ -173,15 +203,15 @@ civit_download() {
     -o "$out" "$url"
 
   if file "$out" | grep -qi "HTML"; then
-    echo "[civitai] ERROR: got HTML instead of model (token missing/invalid/gated). Removing $out"
+    echo "[civitai] ERROR: got HTML instead of model. Removing $out"
     rm -f "$out"
     return 1
   fi
 }
 
 env_lora_download() {
-  local url_var="$1"
-  local filename="${2:-}"
+  local url_var="$1"      # env var name, e.g. CHAR_LORA_URL
+  local filename="${2:-}" # optional output filename override
   local out_dir="${MODELS_DIR}/loras"
 
   local url="${!url_var:-}"
@@ -199,8 +229,6 @@ env_lora_download() {
   filename="${filename// /_}"
   local out="${out_dir}/${filename}"
 
-  echo "[lora] url_var=${url_var}"
-  echo "[lora] url=${url}"
   echo "[lora] out=${out}"
 
   if [ -f "$out" ] && [ -s "$out" ]; then
@@ -213,12 +241,10 @@ env_lora_download() {
     -o "$out" "$url"
 
   if file "$out" | grep -qi "HTML"; then
-    echo "[lora] ERROR: got HTML instead of model (Dropbox auth/blocked). Removing $out"
+    echo "[lora] ERROR: got HTML instead of model. Removing $out"
     rm -f "$out"
     return 1
   fi
-
-  echo "[lora] done: $(ls -lh "$out" | awk '{print $5, $9}')"
 }
 
 # Install node requirements but never allow core pins to be changed.
@@ -229,8 +255,7 @@ safe_pip_install_req() {
   local tmpreq
   tmpreq="$(mktemp)"
 
-  # Strip anything that can break the base env or trigger numpy2 / torch swaps.
-  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python|diffusers|accelerate)([<=> ].*)?$' \
+  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python)([<=> ].*)?$' \
     "$req" > "$tmpreq" || true
 
   python3 -m pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
@@ -306,14 +331,11 @@ wait
 echo "[models] Downloads completed."
 
 # -----------------------------
-# Cache repos on persistent volume
+# Custom nodes: clone/update + symlink (cached)
 # -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
 mkdir -p "$REPO_CACHE"
 
-# -----------------------------
-# Custom nodes: clone/update + symlink (cached, non-fatal)
-# -----------------------------
 UPDATE_NODES="${UPDATE_NODES:-0}"
 INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
 FORCE_NODE_REQS="${FORCE_NODE_REQS:-0}"
@@ -346,10 +368,8 @@ echo "==================================="
 echo "Installing custom nodes + Manager"
 echo "==================================="
 
-# Manager UI
 clone_or_update "ComfyUI-Manager"              "https://github.com/ltdrdata/ComfyUI-Manager.git"
 
-# Your list
 clone_or_update "ComfyUI-Impact-Pack"          "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
 clone_or_update "ComfyUI-Impact-Subpack"       "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
 clone_or_update "ComfyUI-KJNodes"              "https://github.com/kijai/ComfyUI-KJNodes.git"
@@ -363,12 +383,10 @@ clone_or_update "ComfyUI-Custom-Scripts"       "https://github.com/pythongosssss
 clone_or_update "comfyui_controlnet_aux"       "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
 clone_or_update "rgthree-comfy"                "https://github.com/rgthree/rgthree-comfy.git"
 
-# Extra nodes from your screenshot
 clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
 clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
-# Install node requirements once (constrained)
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ "$FORCE_NODE_REQS" = "1" ] || [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
     echo "[pip] Installing node requirements (once, constrained)..."
@@ -389,7 +407,7 @@ fi
 echo "[nodes] Installed custom_nodes:"
 ls -la "$CUSTOM_NODES" || true
 
-# Final safety
+# Final safety (re-assert pins)
 python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" "protobuf<5" "opencv-python<4.12" "mediapipe==0.10.14" \
   "transformers==4.39.3" "tokenizers==0.15.2" || true
