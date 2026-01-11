@@ -31,14 +31,7 @@ fi
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
 # -----------------------------
-# Speed: persistent pip cache
-# -----------------------------
-export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
-export PIP_DISABLE_PIP_VERSION_CHECK=1
-mkdir -p "$PIP_CACHE_DIR"
-
-# -----------------------------
-# Git: non-interactive
+# Non-interactive git
 # -----------------------------
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/true
@@ -46,52 +39,33 @@ git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null
 git config --global --unset-all credential.helper 2>/dev/null || true
 
 # -----------------------------
-# Hard constraints (keep numpy1 + opencv < 4.12)
+# Speed: persistent pip cache
+# -----------------------------
+export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+mkdir -p "$PIP_CACHE_DIR"
+
+# -----------------------------
+# Constraints: keep your working stack
+# (Do NOT pin/upgrade torch or comfy_kitchen here)
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
 numpy<2
-protobuf<5
 opencv-python<4.12
-opencv-contrib-python<4.12
-transformers==4.39.3
-tokenizers==0.15.2
-safetensors
-mediapipe==0.10.14
-sageattention
+protobuf<5
 EOF
 
-echo "[pip] Constraints:"
+echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# -----------------------------
-# OUT OF THE BOX FIX:
-# Put everyone on a modern, consistent torch stack (cu121)
-# This fixes:
-# - torchaudio ABI undefined symbol
-# - comfy_kitchen custom_op crash loop (torch >= 2.4)
-# -----------------------------
-echo "==================================="
-echo "Installing torch stack (2.4.1 + cu121) in the SAME python env"
-echo "==================================="
+# Re-assert only the safe pins (no torch touches)
+$PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  "numpy<2" "opencv-python<4.12" "protobuf<5" || true
 
-# Remove broken / mixed installs first
-$PY -m pip uninstall -y torch torchvision torchaudio xformers comfy_kitchen >/dev/null 2>&1 || true
-
-# Install torch/vision/audio from the official cu121 index
-$PY -m pip install -q --upgrade --prefer-binary \
-  --index-url https://download.pytorch.org/whl/cu121 \
-  torch==2.4.1+cu121 torchvision==0.19.1+cu121 torchaudio==2.4.1+cu121
-
-# xformers is optional; skip it to avoid mismatch loops
-# If you really need it later, install a matching build for your torch
-
-# Reinstall pinned base deps (numpy/opencv/etc)
-$PY -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
-$PY -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" "protobuf<5" "opencv-python<4.12" "opencv-contrib-python<4.12" \
-  "transformers==4.39.3" "tokenizers==0.15.2" "safetensors" \
-  "mediapipe==0.10.14" "sageattention" || true
+# Keep sageattention (you asked for it)
+$PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  "sageattention" || true
 
 echo "[debug] Versions:"
 $PY - <<'PY'
@@ -106,49 +80,54 @@ try:
     import cv2
     print("opencv:", cv2.__version__)
 except Exception as e:
-    print("opencv:", e)
+    print("opencv: not available:", e)
 try:
     import torchaudio
     print("torchaudio:", torchaudio.__version__)
 except Exception as e:
-    print("torchaudio import failed:", e)
+    print("torchaudio: not available:", e)
 try:
     import torchvision
     print("torchvision:", torchvision.__version__)
 except Exception as e:
-    print("torchvision import failed:", e)
+    print("torchvision: not available:", e)
 PY
 
 # -----------------------------
-# SAFE install ComfyUI requirements (filtered)
-# (prevents requirements.txt from downgrading torch stack)
+# IMPORTANT: Prevent restart loop from comfy_kitchen / fp8 extensions
+# If comfy_kitchen is present and incompatible, remove it.
+# (This avoids: torch.library.custom_op AttributeError)
 # -----------------------------
-safe_install_requirements() {
-  local req="$1"
-  [ -f "$req" ] || return 0
-  local tmpreq
-  tmpreq="$(mktemp)"
-
-  grep -viE '^(torch|torchvision|torchaudio|xformers|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
-    "$req" > "$tmpreq" || true
-
-  $PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
-  rm -f "$tmpreq"
-}
-
 echo "==================================="
-echo "Installing ComfyUI requirements (safe)"
+echo "Disabling comfy_kitchen if present"
+echo "==================================="
+$PY -m pip uninstall -y comfy_kitchen >/dev/null 2>&1 || true
+
+# -----------------------------
+# Install "Manager style" deps (like your working Manager log)
+# Use uv, but NEVER install torch from it.
+# -----------------------------
+echo "==================================="
+echo "Installing common deps (uv pip like Manager)"
 echo "==================================="
 
-safe_install_requirements "${COMFY_DIR}/requirements.txt"
+$PY -m pip install -q --upgrade uv || true
 
-# Manager style deps you saw in the log (harmless, helps some nodes)
+/usr/bin/python3 -m uv pip install ftfy || true
+/usr/bin/python3 -m uv pip install "accelerate>=1.2.1" || true
+/usr/bin/python3 -m uv pip install einops || true
+/usr/bin/python3 -m uv pip install "diffusers>=0.33.0" || true
+/usr/bin/python3 -m uv pip install "librosa>=0.9.0" || true
+/usr/bin/python3 -m uv pip install "tqdm>=4.62.0" || true
+/usr/bin/python3 -m uv pip install numba || true
+/usr/bin/python3 -m uv pip install soundfile || true
+
+# Extra audio/video helpers that commonly unblock DJZ/Wan nodes (non-fatal)
 $PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  ftfy einops "tqdm>=4.62.0" "accelerate>=1.2.1" "diffusers>=0.33.0" \
-  "librosa>=0.9.0" numba soundfile ffmpeg-python av decord || true
+  scipy pydub pyloudnorm sentencepiece ffmpeg-python av decord || true
 
 # -----------------------------
-# Helpers (models)
+# Helpers
 # -----------------------------
 download() {
   local url="$1"
@@ -226,6 +205,10 @@ env_lora_download() {
   filename="${filename// /_}"
   local out="${out_dir}/${filename}"
 
+  echo "[lora] url_var=${url_var}"
+  echo "[lora] url=${url}"
+  echo "[lora] out=${out}"
+
   if [ -f "$out" ] && [ -s "$out" ]; then
     echo "[lora] exists: $out"
     return 0
@@ -242,8 +225,23 @@ env_lora_download() {
   fi
 }
 
+# Install node requirements but never allow torch/numpy/opencv to be changed.
+safe_pip_install_req() {
+  local req="$1"
+  [ -f "$req" ] || return 0
+
+  local tmpreq
+  tmpreq="$(mktemp)"
+
+  # Block any line that could touch core stack
+  grep -viE '^(torch|torchvision|torchaudio|numpy|opencv-python|protobuf|xformers|comfy_kitchen)([<=> ].*)?$' "$req" > "$tmpreq" || true
+
+  $PY -m pip install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  rm -f "$tmpreq"
+}
+
 # -----------------------------
-# Model directories + downloads (keep what you already had)
+# Model directories
 # -----------------------------
 mkdir -p \
   "${MODELS_DIR}/sams" \
@@ -257,7 +255,10 @@ mkdir -p \
 
 chmod -R 777 "${MODELS_DIR}/loras" || true
 
-echo "[models] Downloading required models (parallel batches)..."
+# -----------------------------
+# Model downloads (parallel batches)
+# -----------------------------
+echo "[models] Downloading required models..."
 
 download "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth" \
   "${MODELS_DIR}/sams/sam_vit_b_01ec64.pth" &
@@ -304,15 +305,14 @@ wait
 
 echo "[models] Downloads completed."
 
-# -----------------------------
-# Custom nodes (cached clone + safe requirements)
-# -----------------------------
+# =============================
+# Custom Nodes: clone + (optional) deps
+# =============================
 REPO_CACHE="${PERSIST_DIR}/_repos"
 mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
 
 UPDATE_NODES="${UPDATE_NODES:-0}"
 INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
-REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 
 clone_or_update() {
   local name="$1"
@@ -337,26 +337,17 @@ clone_or_update() {
   ln -sfn "$dest" "${CUSTOM_NODES}/${name}"
 }
 
-safe_pip_install_req() {
-  local req="$1"
-  [ -f "$req" ] || return 0
-  local tmpreq
-  tmpreq="$(mktemp)"
-  grep -viE '^(torch|torchvision|torchaudio|xformers|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
-    "$req" > "$tmpreq" || true
-  $PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
-  rm -f "$tmpreq"
-}
-
 echo "==================================="
-echo "Installing custom nodes (cached)"
+echo "Installing custom nodes"
 echo "==================================="
 
+# Manager + your list
 clone_or_update "ComfyUI-Manager"             "https://github.com/ltdrdata/ComfyUI-Manager.git"
 clone_or_update "ComfyUI-Impact-Pack"         "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
 clone_or_update "ComfyUI-Impact-Subpack"      "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
 clone_or_update "ComfyUI-KJNodes"             "https://github.com/kijai/ComfyUI-KJNodes.git"
 clone_or_update "ComfyUI-VideoHelperSuite"    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+clone_or_update "ComfyUI-WanVideoWrapper"     "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
 clone_or_update "ComfyUI-GGUF"                "https://github.com/city96/ComfyUI-GGUF.git"
 clone_or_update "ComfyUI_essentials"          "https://github.com/cubiq/ComfyUI_essentials.git"
 clone_or_update "a-person-mask-generator"     "https://github.com/djbielejeski/a-person-mask-generator.git"
@@ -366,9 +357,18 @@ clone_or_update "rgthree-comfy"               "https://github.com/rgthree/rgthre
 clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
 clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
 
+# DJZ is blocked by Manager security, so we install it ourselves
+clone_or_update "DJZ-Nodes"                   "https://github.com/MushroomFleet/DJZ-Nodes.git"
+
+# Your earlier "RIFE VFI" repo was wrong.
+# Correct repo for ComfyUI-VFI:
+clone_or_update "ComfyUI-VFI"                 "https://github.com/Fannovel16/ComfyUI-Video-Frame-Interpolation.git"
+
+# Install node requirements once (constrained)
+REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
-    echo "[pip] Installing node requirements (once, safe)..."
+    echo "[pip] Installing node requirements (once, constrained)..."
     for dir in "${REPO_CACHE}"/*; do
       [ -d "$dir" ] || continue
       req="${dir}/requirements.txt"
@@ -383,13 +383,21 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   fi
 fi
 
-# Reassert pins at end
-$PY -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
-$PY -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" "protobuf<5" "opencv-python<4.12" "opencv-contrib-python<4.12" \
-  "transformers==4.39.3" "tokenizers==0.15.2" "mediapipe==0.10.14" "sageattention" || true
+# Re-assert safe pins again at the end
+$PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+  "numpy<2" "opencv-python<4.12" "protobuf<5" || true
 
-echo "[setup] Done."
+# Final sanity: confirm torch stack still intact
+echo "[debug] Final torch stack:"
+$PY - <<'PY'
+import torch, numpy
+print("torch:", torch.__version__)
+print("cuda:", torch.version.cuda)
+print("numpy:", numpy.__version__)
+import torchaudio, torchvision
+print("torchaudio:", torchaudio.__version__)
+print("torchvision:", torchvision.__version__)
+PY
 
 # -----------------------------
 # Start JupyterLab
