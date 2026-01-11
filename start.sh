@@ -5,6 +5,8 @@ echo "==================================="
 echo "Starting ComfyUI Setup"
 echo "==================================="
 
+PY="/usr/bin/python3"
+
 COMFY_DIR="${COMFYUI_PATH:-/workspace/ComfyUI}"
 CUSTOM_NODES="${COMFY_DIR}/custom_nodes"
 MODELS_DIR="${COMFY_DIR}/models"
@@ -14,7 +16,7 @@ BAKED_DIR="${COMFYUI_BAKED:-/opt/ComfyUI}"
 
 mkdir -p "$(dirname "$COMFY_DIR")" "$PERSIST_DIR"
 
-# Restore baked ComfyUI if /workspace is an empty mount
+# If ComfyUI is missing but baked exists, restore it (RunPod mount scenario)
 if [ ! -f "${COMFY_DIR}/main.py" ] && [ -f "${BAKED_DIR}/main.py" ]; then
   echo "[setup] Restoring ComfyUI from ${BAKED_DIR} -> ${COMFY_DIR} (mount detected)"
   rm -rf "${COMFY_DIR}"
@@ -29,7 +31,14 @@ fi
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
 # -----------------------------
-# Git: non-interactive (avoid auth prompts)
+# Speed: persistent pip cache
+# -----------------------------
+export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+mkdir -p "$PIP_CACHE_DIR"
+
+# -----------------------------
+# Git: non-interactive
 # -----------------------------
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/true
@@ -37,14 +46,7 @@ git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null
 git config --global --unset-all credential.helper 2>/dev/null || true
 
 # -----------------------------
-# pip cache
-# -----------------------------
-export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
-export PIP_DISABLE_PIP_VERSION_CHECK=1
-mkdir -p "$PIP_CACHE_DIR"
-
-# -----------------------------
-# Hard pins (stability)
+# Hard constraints (keep numpy1 + opencv < 4.12)
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -59,148 +61,116 @@ mediapipe==0.10.14
 sageattention
 EOF
 
-echo "[pip] Enforcing constraints:"
+echo "[pip] Constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Remove packages that can brick startup on older torch (custom_op)
-python3 -m pip uninstall -y comfy_kitchen >/dev/null 2>&1 || true
-
-# Remove opencv if too new (4.12+ pulls numpy2)
-python3 -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
-
-# Force core pins
-python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" \
-  "protobuf<5" \
-  "opencv-python<4.12" \
-  "opencv-contrib-python<4.12" \
-  "transformers==4.39.3" \
-  "tokenizers==0.15.2" \
-  "safetensors" \
-  "mediapipe==0.10.14" \
-  "sageattention" || true
-
 # -----------------------------
-# Align torchvision + torchaudio to installed torch (ABI-safe)
-# Torch 2.1.1 -> torchvision 0.16.1, torchaudio 2.1.1
+# OUT OF THE BOX FIX:
+# Put everyone on a modern, consistent torch stack (cu121)
+# This fixes:
+# - torchaudio ABI undefined symbol
+# - comfy_kitchen custom_op crash loop (torch >= 2.4)
 # -----------------------------
 echo "==================================="
-echo "Aligning torchvision and torchaudio to torch"
+echo "Installing torch stack (2.4.1 + cu121) in the SAME python env"
 echo "==================================="
 
-TORCH_FULL="$(python3 - <<'PY'
+# Remove broken / mixed installs first
+$PY -m pip uninstall -y torch torchvision torchaudio xformers comfy_kitchen >/dev/null 2>&1 || true
+
+# Install torch/vision/audio from the official cu121 index
+$PY -m pip install -q --upgrade --prefer-binary \
+  --index-url https://download.pytorch.org/whl/cu121 \
+  torch==2.4.1+cu121 torchvision==0.19.1+cu121 torchaudio==2.4.1+cu121
+
+# xformers is optional; skip it to avoid mismatch loops
+# If you really need it later, install a matching build for your torch
+
+# Reinstall pinned base deps (numpy/opencv/etc)
+$PY -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
+$PY -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
+  "numpy<2" "protobuf<5" "opencv-python<4.12" "opencv-contrib-python<4.12" \
+  "transformers==4.39.3" "tokenizers==0.15.2" "safetensors" \
+  "mediapipe==0.10.14" "sageattention" || true
+
+echo "[debug] Versions:"
+$PY - <<'PY'
+import sys
+print("python:", sys.version)
 import torch
-print(torch.__version__)
+print("torch:", torch.__version__)
+print("cuda:", torch.version.cuda)
+import numpy
+print("numpy:", numpy.__version__)
+try:
+    import cv2
+    print("opencv:", cv2.__version__)
+except Exception as e:
+    print("opencv:", e)
+try:
+    import torchaudio
+    print("torchaudio:", torchaudio.__version__)
+except Exception as e:
+    print("torchaudio import failed:", e)
+try:
+    import torchvision
+    print("torchvision:", torchvision.__version__)
+except Exception as e:
+    print("torchvision import failed:", e)
 PY
-)"
-TORCH_BASE="${TORCH_FULL%%+*}"
-
-CUDA_VER="$(python3 - <<'PY'
-import torch
-print(torch.version.cuda or "")
-PY
-)"
-
-TV_VER="$(python3 - <<'PY'
-import torch
-tb = torch.__version__.split("+")[0]
-m = {
-  "2.1.0":"0.16.0",
-  "2.1.1":"0.16.1",
-  "2.2.0":"0.17.0",
-  "2.2.1":"0.17.1",
-  "2.3.0":"0.18.0",
-  "2.3.1":"0.18.1",
-  "2.4.0":"0.19.0",
-  "2.4.1":"0.19.1",
-  "2.5.0":"0.20.0",
-  "2.5.1":"0.20.1",
-}
-print(m.get(tb,""))
-PY
-)"
-
-PT_INDEX="cpu"
-case "$CUDA_VER" in
-  11.8*) PT_INDEX="cu118" ;;
-  12.1*) PT_INDEX="cu121" ;;
-  12.4*) PT_INDEX="cu124" ;;
-  12.8*) PT_INDEX="cu128" ;;
-  "")    PT_INDEX="cpu" ;;
-  *)     PT_INDEX="cpu" ;;
-esac
-
-echo "[torch] torch_full=${TORCH_FULL}"
-echo "[torch] torch_base=${TORCH_BASE}"
-echo "[torch] cuda=${CUDA_VER}"
-echo "[torch] torchvision=${TV_VER}"
-echo "[torch] index=${PT_INDEX}"
-
-if [ -n "${TV_VER}" ]; then
-  python3 -m pip uninstall -y torchvision torchaudio >/dev/null 2>&1 || true
-  if [ "$PT_INDEX" = "cpu" ]; then
-    python3 -m pip install -q --upgrade --no-deps \
-      "torchvision==${TV_VER}" \
-      "torchaudio==${TORCH_BASE}" \
-      --index-url "https://download.pytorch.org/whl/cpu" || true
-  else
-    python3 -m pip install -q --upgrade --no-deps \
-      "torchvision==${TV_VER}+${PT_INDEX}" \
-      "torchaudio==${TORCH_BASE}+${PT_INDEX}" \
-      --index-url "https://download.pytorch.org/whl/${PT_INDEX}" || true
-  fi
-else
-  echo "[torch] WARNING: unknown torch version mapping, skipping torchvision install"
-fi
 
 # -----------------------------
 # SAFE install ComfyUI requirements (filtered)
-# (ComfyUI prompt said: pip install -r requirements.txt)
-# We do it, but block torch stack + comfy_kitchen + your pinned libs.
+# (prevents requirements.txt from downgrading torch stack)
 # -----------------------------
-safe_install_comfy_requirements() {
-  local req="${COMFY_DIR}/requirements.txt"
+safe_install_requirements() {
+  local req="$1"
   [ -f "$req" ] || return 0
-
-  echo "==================================="
-  echo "Installing ComfyUI requirements (safe)"
-  echo "==================================="
-
   local tmpreq
   tmpreq="$(mktemp)"
 
-  # Filter out packages that must never be changed here
-  grep -viE '^(torch|torchvision|torchaudio|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
+  grep -viE '^(torch|torchvision|torchaudio|xformers|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
     "$req" > "$tmpreq" || true
 
-  python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  $PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
   rm -f "$tmpreq"
 }
 
-# Some common runtime deps that Manager "Try Fix" often installs
-python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
+echo "==================================="
+echo "Installing ComfyUI requirements (safe)"
+echo "==================================="
+
+safe_install_requirements "${COMFY_DIR}/requirements.txt"
+
+# Manager style deps you saw in the log (harmless, helps some nodes)
+$PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   ftfy einops "tqdm>=4.62.0" "accelerate>=1.2.1" "diffusers>=0.33.0" \
   "librosa>=0.9.0" numba soundfile ffmpeg-python av decord || true
 
-safe_install_comfy_requirements
-
 # -----------------------------
-# Helpers: models
+# Helpers (models)
 # -----------------------------
 download() {
   local url="$1"
   local out="$2"
   mkdir -p "$(dirname "$out")"
+
   if [ -f "$out" ] && [ -s "$out" ]; then
     echo "[models] exists: $out"
     return 0
   fi
+
   echo "[models] downloading: $out"
+
   if command -v aria2c >/dev/null 2>&1; then
-    aria2c -c -x 16 -s 16 -k 1M --allow-overwrite=true --file-allocation=none \
-      -d "$(dirname "$out")" -o "$(basename "$out")" "$url"
+    aria2c -c -x 16 -s 16 -k 1M \
+      --allow-overwrite=true \
+      --file-allocation=none \
+      -d "$(dirname "$out")" -o "$(basename "$out")" \
+      "$url"
     return 0
   fi
+
   if command -v curl >/dev/null 2>&1; then
     curl -L --fail --retry 8 --retry-delay 2 -C - -o "$out" "$url"
   else
@@ -212,16 +182,23 @@ civit_download() {
   local url="$1"
   local out="$2"
   mkdir -p "$(dirname "$out")"
+
   if [ -f "$out" ] && [ -s "$out" ]; then
     echo "[civitai] exists: $out"
     return 0
   fi
+
   echo "[civitai] downloading: $out"
+
   local header=()
   if [ -n "${CIVITAI_TOKEN:-}" ]; then
     header+=( -H "Authorization: Bearer ${CIVITAI_TOKEN}" )
   fi
-  curl -L --fail --retry 10 --retry-delay 2 -C - "${header[@]}" -o "$out" "$url"
+
+  curl -L --fail --retry 10 --retry-delay 2 -C - \
+    "${header[@]}" \
+    -o "$out" "$url"
+
   if file "$out" | grep -qi "HTML"; then
     echo "[civitai] ERROR: got HTML instead of model. Removing $out"
     rm -f "$out"
@@ -233,22 +210,31 @@ env_lora_download() {
   local url_var="$1"
   local filename="${2:-}"
   local out_dir="${MODELS_DIR}/loras"
+
   local url="${!url_var:-}"
   if [ -z "$url" ]; then
     echo "[lora] env ${url_var} is empty -> skip"
     return 0
   fi
+
   mkdir -p "$out_dir"
+
   if [ -z "$filename" ]; then
     filename="$(basename "${url%%\?*}")"
   fi
+
   filename="${filename// /_}"
   local out="${out_dir}/${filename}"
+
   if [ -f "$out" ] && [ -s "$out" ]; then
     echo "[lora] exists: $out"
     return 0
   fi
-  curl -L --fail --retry 10 --retry-delay 2 -C - -A "Mozilla/5.0" -o "$out" "$url"
+
+  curl -L --fail --retry 10 --retry-delay 2 -C - \
+    -A "Mozilla/5.0" \
+    -o "$out" "$url"
+
   if file "$out" | grep -qi "HTML"; then
     echo "[lora] ERROR: got HTML instead of model. Removing $out"
     rm -f "$out"
@@ -257,7 +243,7 @@ env_lora_download() {
 }
 
 # -----------------------------
-# Model directories + downloads (as in your working template)
+# Model directories + downloads (keep what you already had)
 # -----------------------------
 mkdir -p \
   "${MODELS_DIR}/sams" \
@@ -319,7 +305,7 @@ wait
 echo "[models] Downloads completed."
 
 # -----------------------------
-# Custom nodes: clone cached + safe requirements
+# Custom nodes (cached clone + safe requirements)
 # -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
 mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
@@ -356,9 +342,9 @@ safe_pip_install_req() {
   [ -f "$req" ] || return 0
   local tmpreq
   tmpreq="$(mktemp)"
-  grep -viE '^(torch|torchvision|torchaudio|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
+  grep -viE '^(torch|torchvision|torchaudio|xformers|comfy_kitchen|numpy|protobuf|opencv-python|opencv-contrib-python|transformers|tokenizers)([<=> ].*)?$' \
     "$req" > "$tmpreq" || true
-  python3 -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  $PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
   rm -f "$tmpreq"
 }
 
@@ -382,34 +368,6 @@ clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/Com
 clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
 clone_or_update "DJZ-Nodes"                   "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
-# Patch WanVideoWrapper so audio modules don't block the whole extension
-WAN_DIR="${CUSTOM_NODES}/ComfyUI-WanVideoWrapper"
-if [ -d "$WAN_DIR" ]; then
-  echo "[patch] Making WanVideoWrapper audio modules optional (so non-audio nodes still load)"
-  # Turn the two known failing modules into optional=True if referenced in __init__.py
-  # (idempotent)
-  python3 - <<'PY' || true
-import os, re
-p = "/workspace/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper/__init__.py"
-if not os.path.exists(p):
-    raise SystemExit(0)
-s = open(p, "r", encoding="utf-8").read()
-orig = s
-
-# Make nodes_lt_audio / nodes_audio_encoder optional if they are registered
-for mod in ["nodes_lt_audio", "nodes_audio_encoder"]:
-    # patterns like: register_nodes("nodes_lt_audio", ..., optional=False)
-    s = re.sub(rf'(register_nodes\(\s*["\']{re.escape(mod)}["\'].*?optional\s*=\s*)False',
-               r"\g<1>True", s)
-
-# Some repos keep a list and loop; we also allow missing imports by wrapping import in try
-# If no changes were made above, do nothing.
-if s != orig:
-    open(p, "w", encoding="utf-8").write(s)
-PY
-fi
-
-# Install node requirements once (safe)
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
     echo "[pip] Installing node requirements (once, safe)..."
@@ -427,10 +385,9 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   fi
 fi
 
-# Re-assert pins at end
-python3 -m pip uninstall -y comfy_kitchen >/dev/null 2>&1 || true
-python3 -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
-python3 -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
+# Reassert pins at end
+$PY -m pip uninstall -y opencv-python opencv-contrib-python >/dev/null 2>&1 || true
+$PY -m pip install -q --upgrade --force-reinstall --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numpy<2" "protobuf<5" "opencv-python<4.12" "opencv-contrib-python<4.12" \
   "transformers==4.39.3" "tokenizers==0.15.2" "mediapipe==0.10.14" "sageattention" || true
 
@@ -452,4 +409,4 @@ echo "Launching ComfyUI"
 echo "==================================="
 
 cd "${COMFY_DIR}"
-exec python3 main.py --listen 0.0.0.0 --port 8188
+exec $PY main.py --listen 0.0.0.0 --port 8188
