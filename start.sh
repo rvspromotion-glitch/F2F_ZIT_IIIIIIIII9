@@ -126,6 +126,89 @@ $PY -m pip install -q --upgrade uv || true
 $PY -m pip install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   scipy pydub pyloudnorm sentencepiece ffmpeg-python av decord || true
 
+echo "==================================="
+echo "Fixing torch audio/vision ABI mismatch"
+echo "==================================="
+
+$PY - <<'PY'
+import re, torch
+v = torch.__version__  # e.g. 2.9.1+cu128
+m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\+(.+))?$", v)
+if not m:
+    raise SystemExit(f"Unexpected torch version: {v}")
+maj, minor, patch, tag = m.group(1), m.group(2), m.group(3), m.group(4) or "cpu"
+print(v)
+print(f"{maj}.{minor}.{patch}")
+print(tag)
+PY
+
+TORCH_FULL="$($PY - <<'PY'
+import torch
+print(torch.__version__)
+PY
+)"
+TORCH_BASE="$($PY - <<'PY'
+import re, torch
+m = re.match(r"^(\d+)\.(\d+)\.(\d+)", torch.__version__)
+print(".".join(m.groups()))
+PY
+)"
+TORCH_MINOR="$($PY - <<'PY'
+import re, torch
+m = re.match(r"^(\d+)\.(\d+)\.(\d+)", torch.__version__)
+print(m.group(2))
+PY
+)"
+TORCH_PATCH="$($PY - <<'PY'
+import re, torch
+m = re.match(r"^(\d+)\.(\d+)\.(\d+)", torch.__version__)
+print(m.group(3))
+PY
+)"
+TORCH_TAG="$($PY - <<'PY'
+import re, torch
+m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\+(.+))?$", torch.__version__)
+print(m.group(4) or "cpu")
+PY
+)"
+
+# torchvision mapping: torch 2.4.x -> tv 0.19.x, so tv_minor = torch_minor + 15
+TV_MINOR="$($PY - <<PY
+print(int("$TORCH_MINOR") + 15)
+PY
+)"
+TV_VERSION="0.${TV_MINOR}.${TORCH_PATCH}+${TORCH_TAG}"
+
+echo "[torch] torch_full=$TORCH_FULL"
+echo "[torch] torch_tag=$TORCH_TAG"
+echo "[torch] torchvision=$TV_VERSION"
+echo "[torch] torchaudio=$TORCH_FULL"
+
+# Remove mismatched binaries first
+$PY -m pip uninstall -y torchaudio torchvision >/dev/null 2>&1 || true
+
+# Pick correct PyTorch wheel index
+if [ "$TORCH_TAG" = "cpu" ]; then
+  PT_INDEX_URL="https://download.pytorch.org/whl/cpu"
+else
+  PT_INDEX_URL="https://download.pytorch.org/whl/${TORCH_TAG}"
+fi
+
+# Install matching wheels WITHOUT deps (so torch itself is not replaced)
+$PY -m pip install -U --no-deps \
+  "torchaudio==${TORCH_FULL}" \
+  "torchvision==${TV_VERSION}" \
+  --index-url "$PT_INDEX_URL"
+
+# Verify imports
+$PY - <<'PY'
+import torch
+print("torch:", torch.__version__)
+import torchaudio, torchvision
+print("torchaudio:", torchaudio.__version__)
+print("torchvision:", torchvision.__version__)
+PY
+
 # -----------------------------
 # Helpers
 # -----------------------------
