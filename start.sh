@@ -409,7 +409,6 @@ clone_or_update "ComfyUI-Impact-Subpack"      "https://github.com/ltdrdata/Comfy
 # Kijai + Video
 clone_or_update "ComfyUI-KJNodes"             "https://github.com/kijai/ComfyUI-KJNodes.git"
 clone_or_update "ComfyUI-VideoHelperSuite"    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
-clone_or_update "ComfyUI-WanVideoWrapper"     "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
 
 # GGUF / Essentials / Masks
 clone_or_update "ComfyUI-GGUF"                "https://github.com/city96/ComfyUI-GGUF.git"
@@ -426,7 +425,6 @@ clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/Com
 
 # Extras you added
 clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
-clone_or_update "DJZ-Nodes"                   "https://github.com/MushroomFleet/DJZ-Nodes.git"
 
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
