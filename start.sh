@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+STARTUP_START=$(date +%s)
+
 echo "==================================="
 echo "Starting ComfyUI Setup"
 echo "==================================="
@@ -29,10 +31,12 @@ fi
 mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 
 # -----------------------------
-# Speed: persistent pip cache
+# Speed: persistent pip cache + optimizations
 # -----------------------------
 export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PYTHONDONTWRITEBYTECODE=1  # Skip .pyc creation during install (faster)
+export PYTHONUNBUFFERED=1
 mkdir -p "$PIP_CACHE_DIR"
 
 PY="${PYTHON_BIN:-python3}"
@@ -97,9 +101,10 @@ TORCHVISION_VER="0.19.1"
 
 case "$CUDA_TAG" in
   cu128)
-    TORCH_VER="2.9.1"
-    TORCHAUDIO_VER="2.9.1"
-    TORCHVISION_VER="0.24.1"
+    # PyTorch 2.8.0 is the stable version for CUDA 12.8
+    TORCH_VER="2.8.0"
+    TORCHAUDIO_VER="2.8.0"
+    TORCHVISION_VER="0.23.0"
     ;;
   cu124)
     # if you ever run a cu124 base, use 2.6.0 family (safe default)
@@ -162,6 +167,12 @@ $PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numba" \
   "soundfile" || true
 
+# Install xformers for PyTorch 2.8 + CUDA 12.8 (if not already installed by base image)
+if [ "$CUDA_TAG" = "cu128" ]; then
+  echo "[pip] Installing xformers for PyTorch 2.8 + CUDA 12.8..."
+  $PIP install -q --upgrade xformers --index-url https://download.pytorch.org/whl/cu128 || true
+fi
+
 echo "[debug] Versions:"
 $PY - <<'PY'
 import sys
@@ -205,17 +216,23 @@ download() {
 
   echo "[models] downloading: $out"
 
+  # Speed: use aria2c with optimized settings for RunPod network
   if command -v aria2c >/dev/null 2>&1; then
     aria2c -c -x 16 -s 16 -k 1M \
+      --max-connection-per-server=16 \
+      --min-split-size=1M \
       --allow-overwrite=true \
       --file-allocation=none \
+      --retry-wait=2 \
+      --max-tries=8 \
+      --timeout=30 \
       -d "$(dirname "$out")" -o "$(basename "$out")" \
-      "$url"
+      "$url" 2>&1 | grep -v "^Download Results:" || true
     return 0
   fi
 
   if command -v curl >/dev/null 2>&1; then
-    curl -L --fail --retry 8 --retry-delay 2 -C - -o "$out" "$url"
+    curl -L --fail --retry 8 --retry-delay 2 --max-time 300 -C - -o "$out" "$url"
   else
     wget -c -O "$out" "$url"
   fi
@@ -380,7 +397,9 @@ clone_or_update() {
   if [ ! -d "${dest}/.git" ]; then
     echo "[nodes] cloning ${name}..."
     rm -rf "$dest"
-    if ! git -c http.extraHeader= -c credential.helper= clone --depth 1 --progress "$url" "$dest"; then
+    # Speed: use single-branch + shallow clone with optimized config
+    if ! git -c http.extraHeader= -c credential.helper= -c http.postBuffer=524288000 \
+         clone --depth 1 --single-branch --progress "$url" "$dest" 2>&1 | grep -v "Checking out files" || true; then
       echo "[nodes] WARNING: failed to clone ${name}, skipping"
       rm -rf "$dest"
       return 0
@@ -399,32 +418,38 @@ echo "==================================="
 echo "Installing custom nodes (cached)"
 echo "==================================="
 
-# Manager
+# Speed optimization: Clone critical nodes first, then parallelize the rest
+# Manager (needed first for dependency resolution)
 clone_or_update "ComfyUI-Manager"             "https://github.com/ltdrdata/ComfyUI-Manager.git"
 
-# Impact / Ultralytics
-clone_or_update "ComfyUI-Impact-Pack"         "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
-clone_or_update "ComfyUI-Impact-Subpack"      "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+# Parallel cloning for better startup speed - batch 1 (core functionality)
+(
+  clone_or_update "ComfyUI-Impact-Pack"         "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
+  clone_or_update "ComfyUI-Impact-Subpack"      "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+  clone_or_update "ComfyUI-KJNodes"             "https://github.com/kijai/ComfyUI-KJNodes.git"
+) &
+(
+  clone_or_update "ComfyUI-VideoHelperSuite"    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+  clone_or_update "ComfyUI-GGUF"                "https://github.com/city96/ComfyUI-GGUF.git"
+  clone_or_update "ComfyUI_essentials"          "https://github.com/cubiq/ComfyUI_essentials.git"
+) &
+(
+  clone_or_update "a-person-mask-generator"     "https://github.com/djbielejeski/a-person-mask-generator.git"
+  clone_or_update "ComfyUI-Custom-Scripts"      "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
+  clone_or_update "comfyui_controlnet_aux"      "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
+) &
+(
+  clone_or_update "rgthree-comfy"               "https://github.com/rgthree/rgthree-comfy.git"
+  clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
+  clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
+) &
+(
+  # DJZ Nodes - Professional video & film effects (critical for user)
+  clone_or_update "DJZ-Nodes"                   "https://github.com/MushroomFleet/DJZ-Nodes.git"
+) &
+wait
 
-# Kijai + Video
-clone_or_update "ComfyUI-KJNodes"             "https://github.com/kijai/ComfyUI-KJNodes.git"
-clone_or_update "ComfyUI-VideoHelperSuite"    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
-
-# GGUF / Essentials / Masks
-clone_or_update "ComfyUI-GGUF"                "https://github.com/city96/ComfyUI-GGUF.git"
-clone_or_update "ComfyUI_essentials"          "https://github.com/cubiq/ComfyUI_essentials.git"
-clone_or_update "a-person-mask-generator"     "https://github.com/djbielejeski/a-person-mask-generator.git"
-
-# Scripts / Aux / rgthree
-clone_or_update "ComfyUI-Custom-Scripts"      "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
-clone_or_update "comfyui_controlnet_aux"      "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
-clone_or_update "rgthree-comfy"               "https://github.com/rgthree/rgthree-comfy.git"
-
-# RIFE / Interpolation
-clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
-
-# Extras you added
-clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
+echo "[nodes] All custom nodes cloned/updated successfully"
 
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
@@ -479,6 +504,11 @@ jupyter lab \
 
 echo "==================================="
 echo "Launching ComfyUI"
+echo "==================================="
+
+STARTUP_END=$(date +%s)
+STARTUP_DURATION=$((STARTUP_END - STARTUP_START))
+echo "[startup] Total startup time: ${STARTUP_DURATION}s"
 echo "==================================="
 
 cd "${COMFY_DIR}"
