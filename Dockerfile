@@ -1,4 +1,4 @@
-FROM runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV COMFYUI_PATH=/workspace/ComfyUI
@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
+# Use compatible versions for PyTorch 2.8 + CUDA 12.8
 RUN pip install --no-cache-dir "numpy<2"
-RUN pip install --no-cache-dir --upgrade xformers==0.0.23
+RUN pip install --no-cache-dir --upgrade xformers --index-url https://download.pytorch.org/whl/cu128
 
 RUN pip install --no-cache-dir ultralytics
 RUN pip install --no-cache-dir jupyterlab
