@@ -420,32 +420,33 @@ echo "==================================="
 
 # Speed optimization: Clone critical nodes first, then parallelize the rest
 # Manager (needed first for dependency resolution)
-clone_or_update "ComfyUI-Manager"             "https://github.com/ltdrdata/ComfyUI-Manager.git"
+clone_or_update "ComfyUI-Manager"              "https://github.com/ltdrdata/ComfyUI-Manager.git"
 
 # Parallel cloning for better startup speed - batch 1 (core functionality)
 (
-  clone_or_update "ComfyUI-Impact-Pack"         "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
-  clone_or_update "ComfyUI-Impact-Subpack"      "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
-  clone_or_update "ComfyUI-KJNodes"             "https://github.com/kijai/ComfyUI-KJNodes.git"
+  clone_or_update "ComfyUI-Impact-Pack"          "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
+  clone_or_update "ComfyUI-Impact-Subpack"       "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+  clone_or_update "ComfyUI-KJNodes"              "https://github.com/kijai/ComfyUI-KJNodes.git"
 ) &
 (
-  clone_or_update "ComfyUI-VideoHelperSuite"    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
-  clone_or_update "ComfyUI-GGUF"                "https://github.com/city96/ComfyUI-GGUF.git"
-  clone_or_update "ComfyUI_essentials"          "https://github.com/cubiq/ComfyUI_essentials.git"
+  clone_or_update "ComfyUI-VideoHelperSuite"     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+  clone_or_update "ComfyUI-WanVideoWrapper"      "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
+  clone_or_update "ComfyUI-GGUF"                 "https://github.com/city96/ComfyUI-GGUF.git"
 ) &
 (
-  clone_or_update "a-person-mask-generator"     "https://github.com/djbielejeski/a-person-mask-generator.git"
-  clone_or_update "ComfyUI-Custom-Scripts"      "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
-  clone_or_update "comfyui_controlnet_aux"      "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
+  clone_or_update "ComfyUI_essentials"           "https://github.com/cubiq/ComfyUI_essentials.git"
+  clone_or_update "a-person-mask-generator"      "https://github.com/djbielejeski/a-person-mask-generator.git"
+  clone_or_update "ComfyUI-VFI"                  "https://github.com/Fannovel16/ComfyUI-VFI.git"
 ) &
 (
-  clone_or_update "rgthree-comfy"               "https://github.com/rgthree/rgthree-comfy.git"
-  clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
-  clone_or_update "RES4LYF"                     "https://github.com/ClownsharkBatwing/RES4LYF.git"
+  clone_or_update "ComfyUI-Custom-Scripts"       "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
+  clone_or_update "comfyui_controlnet_aux"       "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
+  clone_or_update "rgthree-comfy"                "https://github.com/rgthree/rgthree-comfy.git"
 ) &
 (
-  # DJZ Nodes - Professional video & film effects (critical for user)
-  clone_or_update "DJZ-Nodes"                   "https://github.com/MushroomFleet/DJZ-Nodes.git"
+  clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
+  clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
+  clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
 ) &
 wait
 
