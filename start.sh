@@ -7,11 +7,77 @@ echo "==================================="
 echo "Starting ComfyUI Setup"
 echo "==================================="
 
+# Fix DNS resolution issues
+echo "[network] Checking DNS configuration..."
+echo "[network] Current /etc/resolv.conf:"
+cat /etc/resolv.conf
+
+# Add Google DNS if not present
+if ! grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null; then
+  echo "[network] Adding Google DNS to /etc/resolv.conf..."
+  {
+    echo "nameserver 8.8.8.8"
+    echo "nameserver 8.8.4.4"
+    echo "nameserver 1.1.1.1"
+  } >> /etc/resolv.conf
+  echo "[network] Updated /etc/resolv.conf:"
+  cat /etc/resolv.conf
+fi
+
+# Test DNS resolution with multiple methods
+echo "[network] Testing DNS resolution..."
+if command -v nslookup >/dev/null 2>&1; then
+  if nslookup pypi.org >/dev/null 2>&1; then
+    echo "[network] DNS resolution working (nslookup test passed)"
+  else
+    echo "[network] WARNING: nslookup test failed"
+  fi
+fi
+
+if command -v ping >/dev/null 2>&1; then
+  if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+    echo "[network] Basic connectivity OK (ping 8.8.8.8 successful)"
+  else
+    echo "[network] WARNING: Cannot ping 8.8.8.8"
+  fi
+fi
+
+# Try to resolve pypi.org using getent
+if command -v getent >/dev/null 2>&1; then
+  if getent hosts pypi.org >/dev/null 2>&1; then
+    echo "[network] DNS working (getent hosts pypi.org successful)"
+  else
+    echo "[network] WARNING: getent hosts pypi.org failed"
+  fi
+fi
+
+# Wait for network to be ready before continuing (critical for RunPod timing issues)
+echo "[network] Waiting for network readiness..."
+MAX_WAIT=30
+WAIT_COUNT=0
+while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+  if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && \
+     (getent hosts pypi.org >/dev/null 2>&1 || nslookup pypi.org >/dev/null 2>&1); then
+    echo "[network] Network is ready!"
+    break
+  fi
+  WAIT_COUNT=$((WAIT_COUNT + 1))
+  if [ $WAIT_COUNT -lt $MAX_WAIT ]; then
+    echo "[network] Network not ready, waiting... ($WAIT_COUNT/$MAX_WAIT)"
+    sleep 1
+  else
+    echo "[network] WARNING: Network still not ready after ${MAX_WAIT}s, proceeding anyway"
+  fi
+done
+
 COMFY_DIR="${COMFYUI_PATH:-/workspace/ComfyUI}"
 CUSTOM_NODES="${COMFY_DIR}/custom_nodes"
 MODELS_DIR="${COMFY_DIR}/models"
 
-PERSIST_DIR="${RUNPOD_VOLUME:-/workspace/runpod-slim}"
+# Persistent RunPod volume
+PERSIST_DIR="${RUNPOD_VOLUME:-/workspace/runpod-volume}"
+
+# Optional baked fallback (if /workspace is a mounted empty volume)
 BAKED_DIR="${COMFYUI_BAKED:-/opt/ComfyUI}"
 
 mkdir -p "$(dirname "$COMFY_DIR")" "$PERSIST_DIR"
@@ -35,7 +101,7 @@ mkdir -p "${CUSTOM_NODES}" "${MODELS_DIR}"
 # -----------------------------
 export PIP_CACHE_DIR="${PERSIST_DIR}/.cache/pip"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
-export PYTHONDONTWRITEBYTECODE=1  # Skip .pyc creation during install (faster)
+export PYTHONDONTWRITEBYTECODE=1
 export PYTHONUNBUFFERED=1
 mkdir -p "$PIP_CACHE_DIR"
 
@@ -43,15 +109,7 @@ PY="${PYTHON_BIN:-python3}"
 PIP="$PY -m pip"
 
 # -----------------------------
-# Make git non-interactive
-# -----------------------------
-export GIT_TERMINAL_PROMPT=0
-export GIT_ASKPASS=/bin/true
-git config --global --unset-all http.https://github.com/.extraheader 2>/dev/null || true
-git config --global --unset-all credential.helper 2>/dev/null || true
-
-# -----------------------------
-# Constraints (keep environment stable)
+# Hard constraints (prevents numpy2 / transformers drift)
 # -----------------------------
 CONSTRAINTS_FILE="${PERSIST_DIR}/pip-constraints.txt"
 cat > "$CONSTRAINTS_FILE" <<'EOF'
@@ -61,40 +119,19 @@ protobuf<5
 transformers==4.39.3
 tokenizers==0.15.2
 mediapipe==0.10.14
-safetensors
 sageattention
 EOF
+
+export PIP_CONSTRAINT="$CONSTRAINTS_FILE"
 
 echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# -----------------------------
-# Detect CUDA tag and pin torch stack to a compatible known-good set
-# - CUDA 12.1 -> cu121 -> torch 2.4.1 / tv 0.19.1 / ta 2.4.1
-# - CUDA 12.8 -> cu128 -> torch 2.9.1 / tv 0.24.1 / ta 2.9.1
-# -----------------------------
-echo "==================================="
-echo "Pinning torch stack"
-echo "==================================="
+# Detect CUDA tag from installed torch
+CUDA_TAG=$(python3 -c "import torch; print('cu' + torch.version.cuda.replace('.', '')[:4] if torch.version.cuda else 'cpu')" 2>/dev/null || echo "cu128")
+echo "[debug] Detected CUDA tag: $CUDA_TAG"
 
-CUDA_TAG="cu121"
-if command -v nvcc >/dev/null 2>&1; then
-  # nvcc prints "release 12.X"
-  CUDA_REL="$(nvcc --version 2>/dev/null | awk '/release/ {print $6}' | tr -d ',' || true)"
-  case "$CUDA_REL" in
-    12.8*) CUDA_TAG="cu128" ;;
-    12.7*) CUDA_TAG="cu128" ;;
-    12.6*) CUDA_TAG="cu128" ;;
-    12.5*) CUDA_TAG="cu128" ;;
-    12.4*) CUDA_TAG="cu124" ;;
-    12.3*) CUDA_TAG="cu121" ;;
-    12.2*) CUDA_TAG="cu121" ;;
-    12.1*) CUDA_TAG="cu121" ;;
-    11.8*) CUDA_TAG="cu118" ;;
-    *) CUDA_TAG="cu121" ;;
-  esac
-fi
-
+# PyTorch version logic
 TORCH_VER="2.4.1"
 TORCHAUDIO_VER="2.4.1"
 TORCHVISION_VER="0.19.1"
@@ -107,7 +144,6 @@ case "$CUDA_TAG" in
     TORCHVISION_VER="0.23.0"
     ;;
   cu124)
-    # if you ever run a cu124 base, use 2.6.0 family (safe default)
     TORCH_VER="2.6.0"
     TORCHAUDIO_VER="2.6.0"
     TORCHVISION_VER="0.21.0"
@@ -124,39 +160,39 @@ case "$CUDA_TAG" in
     ;;
 esac
 
-echo "[torch] cuda_tag=${CUDA_TAG}"
-echo "[torch] torch=${TORCH_VER}+${CUDA_TAG}"
-echo "[torch] torchvision=${TORCHVISION_VER}+${CUDA_TAG}"
-echo "[torch] torchaudio=${TORCHAUDIO_VER}+${CUDA_TAG}"
+echo "[pip] Target torch stack: torch=$TORCH_VER torchvision=$TORCHVISION_VER torchaudio=$TORCHAUDIO_VER"
 
-# Remove any mismatched binaries first
-$PIP uninstall -y torch torchvision torchaudio >/dev/null 2>&1 || true
+# Install/update torch stack with retries
+MAX_RETRIES=3
+RETRY_COUNT=0
+RETRY_DELAY=5
 
-# Install pinned stack (no deps to avoid surprise upgrades)
-$PIP install -U --no-deps \
-  "torch==${TORCH_VER}+${CUDA_TAG}" \
-  "torchvision==${TORCHVISION_VER}+${CUDA_TAG}" \
-  "torchaudio==${TORCHAUDIO_VER}+${CUDA_TAG}" \
-  --index-url "https://download.pytorch.org/whl/${CUDA_TAG}"
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+  echo "[pip] Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES for torch stack..."
 
-# -----------------------------
-# Now install constrained python deps (these were causing your pytree error)
-# -----------------------------
-echo "==================================="
-echo "Installing constrained deps"
-echo "==================================="
+  if $PIP install -q --upgrade --prefer-binary \
+    --index-url "https://download.pytorch.org/whl/${CUDA_TAG}" \
+    --retries 5 --timeout 60 \
+    -c "$CONSTRAINTS_FILE" \
+    "torch==${TORCH_VER}" \
+    "torchvision==${TORCHVISION_VER}" \
+    "torchaudio==${TORCHAUDIO_VER}"; then
+    echo "[pip] Torch stack installed successfully"
+    break
+  else
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+      echo "[pip] Install failed, retrying in ${RETRY_DELAY}s..."
+      sleep $RETRY_DELAY
+      RETRY_DELAY=$((RETRY_DELAY * 2))
+    else
+      echo "[pip] WARNING: Failed to install torch stack after $MAX_RETRIES attempts"
+      echo "[pip] Continuing with existing torch installation"
+    fi
+  fi
+done
 
-$PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" \
-  "opencv-python<4.12" \
-  "protobuf<5" \
-  "transformers==4.39.3" \
-  "tokenizers==0.15.2" \
-  "safetensors" \
-  "mediapipe==0.10.14" \
-  "sageattention" || true
-
-# Manager style deps you saw during "Try fix" (safe to preinstall)
+# Manager style deps
 $PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "ftfy" \
   "accelerate>=1.2.1" \
@@ -167,7 +203,7 @@ $PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numba" \
   "soundfile" || true
 
-# Install xformers for PyTorch 2.8 + CUDA 12.8 (if not already installed by base image)
+# Install xformers for PyTorch 2.8 + CUDA 12.8
 if [ "$CUDA_TAG" = "cu128" ]; then
   echo "[pip] Installing xformers for PyTorch 2.8 + CUDA 12.8..."
   $PIP install -q --upgrade xformers --index-url https://download.pytorch.org/whl/cu128 || true
@@ -183,10 +219,15 @@ print("cuda:", torch.version.cuda)
 import numpy as np
 print("numpy:", np.__version__)
 try:
-  import cv2
-  print("opencv:", cv2.__version__)
-except Exception as e:
-  print("opencv: not available:", e)
+  import transformers
+  print("transformers:", transformers.__version__)
+except:
+  print("transformers: not installed")
+try:
+  import mediapipe
+  print("mediapipe:", mediapipe.__version__)
+except:
+  print("mediapipe: not installed")
 try:
   import torchaudio
   print("torchaudio:", torchaudio.__version__)
@@ -197,8 +238,6 @@ try:
   print("torchvision:", torchvision.__version__)
 except Exception as e:
   print("torchvision import failed:", e)
-import transformers
-print("transformers:", transformers.__version__)
 PY
 
 # -----------------------------
@@ -225,7 +264,7 @@ download() {
       --file-allocation=none \
       --retry-wait=2 \
       --max-tries=8 \
-      --timeout=30 \
+      --timeout=60 \
       -d "$(dirname "$out")" -o "$(basename "$out")" \
       "$url" 2>&1 | grep -v "^Download Results:" || true
     return 0
@@ -238,156 +277,44 @@ download() {
   fi
 }
 
-civit_download() {
-  local url="$1"
-  local out="$2"
-  mkdir -p "$(dirname "$out")"
-
-  if [ -f "$out" ] && [ -s "$out" ]; then
-    echo "[civitai] exists: $out"
-    return 0
-  fi
-
-  echo "[civitai] downloading: $out"
-
-  local header=()
-  if [ -n "${CIVITAI_TOKEN:-}" ]; then
-    header+=( -H "Authorization: Bearer ${CIVITAI_TOKEN}" )
-  fi
-
-  curl -L --fail --retry 10 --retry-delay 2 -C - \
-    "${header[@]}" \
-    -o "$out" "$url"
-
-  if file "$out" | grep -qi "HTML"; then
-    echo "[civitai] ERROR: got HTML instead of model. Removing $out"
-    rm -f "$out"
-    return 1
-  fi
-}
-
-env_lora_download() {
-  local url_var="$1"
-  local filename="${2:-}"
-  local out_dir="${MODELS_DIR}/loras"
-
-  local url="${!url_var:-}"
-  if [ -z "$url" ]; then
-    echo "[lora] env ${url_var} is empty -> skip"
-    return 0
-  fi
-
-  mkdir -p "$out_dir"
-
-  if [ -z "$filename" ]; then
-    filename="$(basename "${url%%\?*}")"
-  fi
-
-  filename="${filename// /_}"
-  local out="${out_dir}/${filename}"
-
-  if [ -f "$out" ] && [ -s "$out" ]; then
-    echo "[lora] exists: $out"
-    return 0
-  fi
-
-  curl -L --fail --retry 10 --retry-delay 2 -C - \
-    -A "Mozilla/5.0" \
-    -o "$out" "$url"
-
-  if file "$out" | grep -qi "HTML"; then
-    echo "[lora] ERROR: got HTML instead of model. Removing $out"
-    rm -f "$out"
-    return 1
-  fi
-}
-
-# Install node requirements but never allow torch/numpy/transformers/opencv to be changed
+# Install node requirements but never allow torch stack / numpy / transformers to be changed
 safe_pip_install_req() {
   local req="$1"
   [ -f "$req" ] || return 0
 
+  # Filter lines that must never override global pins
   local tmpreq
   tmpreq="$(mktemp)"
-  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf|opencv-python)([<=> ].*)?$' "$req" > "$tmpreq" || true
-  $PIP install -q --prefer-binary -c "$CONSTRAINTS_FILE" -r "$tmpreq" || true
+  grep -viE '^(torch|torchvision|torchaudio|numpy|transformers|tokenizers|protobuf)([<=> ].*)?$' "$req" > "$tmpreq" || true
+
+  # Retry with exponential backoff
+  local retries=3
+  local delay=2
+  for ((i=1; i<=retries; i++)); do
+    if $PIP install -q --prefer-binary --retries 5 --timeout 60 \
+      -c "$CONSTRAINTS_FILE" -r "$tmpreq"; then
+      rm -f "$tmpreq"
+      return 0
+    fi
+    if [ $i -lt $retries ]; then
+      echo "  [pip] Retry $i/$retries failed, waiting ${delay}s..."
+      sleep $delay
+      delay=$((delay * 2))
+    fi
+  done
+
+  echo "  [pip] WARNING: Failed to install requirements from $req"
   rm -f "$tmpreq"
+  return 0
 }
 
 # -----------------------------
-# Model directories
-# -----------------------------
-mkdir -p \
-  "${MODELS_DIR}/sams" \
-  "${MODELS_DIR}/ultralytics/bbox" \
-  "${MODELS_DIR}/ultralytics/segm" \
-  "${MODELS_DIR}/diffusion_models" \
-  "${MODELS_DIR}/vae" \
-  "${MODELS_DIR}/clip" \
-  "${MODELS_DIR}/loras" \
-  "${MODELS_DIR}/checkpoints"
-
-chmod -R 777 "${MODELS_DIR}/loras" || true
-
-# -----------------------------
-# Model downloads (parallel batches)
-# -----------------------------
-echo "[models] Downloading required models (parallel batches)..."
-
-download "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth" \
-  "${MODELS_DIR}/sams/sam_vit_b_01ec64.pth" &
-download "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth" \
-  "${MODELS_DIR}/sams/sam_vit_l_0b3195.pth" &
-
-download "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/detection/bbox/face_yolov8m.pt" \
-  "${MODELS_DIR}/ultralytics/bbox/face_yolov8m.pt" &
-download "https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8m-seg.pt" \
-  "${MODELS_DIR}/ultralytics/segm/person_yolov8m-seg.pt" &
-wait
-
-download "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt" \
-  "${MODELS_DIR}/ultralytics/bbox/yolov8n.pt" &
-download "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n-pose.pt" \
-  "${MODELS_DIR}/ultralytics/bbox/yolov8n-pose.pt" &
-download "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8m.pt" \
-  "${MODELS_DIR}/ultralytics/bbox/yolov8m.pt" &
-download "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt" \
-  "${MODELS_DIR}/ultralytics/bbox/hand_yolov8n.pt" &
-
-download "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n-seg.pt" \
-  "${MODELS_DIR}/ultralytics/segm/yolov8n-seg.pt" &
-download "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8m-seg.pt" \
-  "${MODELS_DIR}/ultralytics/segm/yolov8m-seg.pt" &
-wait
-
-download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors" \
-  "${MODELS_DIR}/diffusion_models/z_image_turbo_bf16.safetensors" &
-download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" \
-  "${MODELS_DIR}/vae/ae.safetensors" &
-download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
-  "${MODELS_DIR}/clip/qwen_3_4b.safetensors" &
-wait
-
-civit_download "https://civitai.com/api/download/models/1511445?type=Model&format=SafeTensor" \
-  "${MODELS_DIR}/loras/1511445_Spread_i5XL.safetensors" &
-civit_download "https://civitai.com/api/download/models/2435561?type=Model&format=SafeTensor&size=pruned&fp=fp16" \
-  "${MODELS_DIR}/checkpoints/2435561_Photo4_fp16_pruned.safetensors" &
-wait
-
-env_lora_download "CHAR_LORA_URL" &
-wait
-
-echo "[models] Downloads completed."
-
-# -----------------------------
-# Custom nodes: clone + install (cached)
+# Cache custom nodes on persistent volume
 # -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
-mkdir -p "$REPO_CACHE" "$CUSTOM_NODES"
+mkdir -p "$REPO_CACHE"
 
 UPDATE_NODES="${UPDATE_NODES:-0}"
-INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
-REQ_MARK="${PERSIST_DIR}/.node-reqs-installed.v2"
 
 clone_or_update() {
   local name="$1"
@@ -418,39 +345,50 @@ echo "==================================="
 echo "Installing custom nodes (cached)"
 echo "==================================="
 
-# Speed optimization: Clone critical nodes first, then parallelize the rest
-# Manager (needed first for dependency resolution)
-clone_or_update "ComfyUI-Manager"              "https://github.com/ltdrdata/ComfyUI-Manager.git"
+# Clone all custom nodes in parallel for maximum speed
+echo "[nodes] Cloning/updating custom nodes in parallel batches..."
 
-# Parallel cloning for better startup speed - batch 1 (core functionality)
+# Manager first (needed for dependency resolution)
+clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.git"
+
+# Parallel batches
 (
-  clone_or_update "ComfyUI-Impact-Pack"          "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
-  clone_or_update "ComfyUI-Impact-Subpack"       "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
-  clone_or_update "ComfyUI-KJNodes"              "https://github.com/kijai/ComfyUI-KJNodes.git"
+  clone_or_update "ComfyUI-Impact-Pack" "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
+  clone_or_update "ComfyUI-Impact-Subpack" "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+  clone_or_update "ComfyUI-KJNodes" "https://github.com/kijai/ComfyUI-KJNodes.git"
 ) &
+
 (
-  clone_or_update "ComfyUI-VideoHelperSuite"     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
-  clone_or_update "ComfyUI-WanVideoWrapper"      "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
-  clone_or_update "ComfyUI-GGUF"                 "https://github.com/city96/ComfyUI-GGUF.git"
+  clone_or_update "ComfyUI-VideoHelperSuite" "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+  clone_or_update "ComfyUI-WanVideoWrapper" "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
+  clone_or_update "ComfyUI-GGUF" "https://github.com/city96/ComfyUI-GGUF.git"
 ) &
+
 (
-  clone_or_update "ComfyUI_essentials"           "https://github.com/cubiq/ComfyUI_essentials.git"
-  clone_or_update "a-person-mask-generator"      "https://github.com/djbielejeski/a-person-mask-generator.git"
-  clone_or_update "ComfyUI-VFI"                  "https://github.com/Fannovel16/ComfyUI-VFI.git"
+  clone_or_update "ComfyUI_essentials" "https://github.com/cubiq/ComfyUI_essentials.git"
+  clone_or_update "a-person-mask-generator" "https://github.com/djbielejeski/a-person-mask-generator.git"
+  clone_or_update "ComfyUI-VFI" "https://github.com/Fannovel16/ComfyUI-VFI.git"
 ) &
+
 (
-  clone_or_update "ComfyUI-Custom-Scripts"       "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
-  clone_or_update "comfyui_controlnet_aux"       "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
-  clone_or_update "rgthree-comfy"                "https://github.com/rgthree/rgthree-comfy.git"
+  clone_or_update "ComfyUI-Custom-Scripts" "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
+  clone_or_update "comfyui_controlnet_aux" "https://github.com/Fannovel16/comfyui_controlnet_aux.git"
+  clone_or_update "rgthree-comfy" "https://github.com/rgthree/rgthree-comfy.git"
 ) &
+
 (
-  clone_or_update "ComfyUI-Frame-Interpolation"  "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
-  clone_or_update "RES4LYF"                      "https://github.com/ClownsharkBatwing/RES4LYF.git"
-  clone_or_update "DJZ-Nodes"                    "https://github.com/MushroomFleet/DJZ-Nodes.git"
+  clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
+  clone_or_update "RES4LYF" "https://github.com/ClownsharkBatwing/RES4LYF.git"
+  clone_or_update "DJZ-Nodes" "https://github.com/MushroomFleet/DJZ-Nodes.git"
 ) &
+
 wait
 
 echo "[nodes] All custom nodes cloned/updated successfully"
+
+# Install node requirements
+INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
+REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
   if [ ! -f "$REQ_MARK" ] || [ "$UPDATE_NODES" = "1" ]; then
