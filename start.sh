@@ -321,9 +321,9 @@ ln -sf "../ae.safetensors" "${MODELS_DIR}/vae/pixel_space/z-index-ae.safetensors
 download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
   "${MODELS_DIR}/clip/qwen_3_4b.safetensors" &
 
-# Upscale model - SkinDiffDetail
-download "https://huggingface.co/jayymeson/ix-ITF-SkinDiffDetail-Lite-v1/resolve/main/ix-ITF-SkinDiffDetail-Lite-v1.pth" \
-  "${MODELS_DIR}/upscale_models/ix-ITF-SkinDiffDetail-Lite-v1.pth" &
+# Upscale model - SkinDiffDetail (CORRECT: 1x not ix)
+download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/1x-ITF-SkinDiffDetail-Lite-v1.pth" \
+  "${MODELS_DIR}/upscale_models/1x-ITF-SkinDiffDetail-Lite-v1.pth" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
