@@ -286,6 +286,53 @@ safe_pip_install_req() {
 }
 
 # -----------------------------
+# Model directories
+# -----------------------------
+echo "[models] Creating model directories..."
+mkdir -p \
+  "${MODELS_DIR}/checkpoints" \
+  "${MODELS_DIR}/clip" \
+  "${MODELS_DIR}/clip_vision" \
+  "${MODELS_DIR}/controlnet" \
+  "${MODELS_DIR}/diffusion_models" \
+  "${MODELS_DIR}/embeddings" \
+  "${MODELS_DIR}/loras" \
+  "${MODELS_DIR}/unet" \
+  "${MODELS_DIR}/upscale_models" \
+  "${MODELS_DIR}/vae" \
+  "${MODELS_DIR}/vae/pixel_space"
+
+# -----------------------------
+# Download required models (in parallel)
+# -----------------------------
+echo "[models] Downloading required models..."
+
+# Z-Image Turbo models (FLUX/SANA workflow)
+download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors" \
+  "${MODELS_DIR}/diffusion_models/z_image_turbo_bf16.safetensors" &
+
+download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" \
+  "${MODELS_DIR}/vae/ae.safetensors" &
+
+# Also symlink to pixel_space subdirectory (some workflows look there)
+mkdir -p "${MODELS_DIR}/vae/pixel_space"
+ln -sf "../ae.safetensors" "${MODELS_DIR}/vae/pixel_space/z-index-ae.safetensors" 2>/dev/null || true
+
+download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
+  "${MODELS_DIR}/clip/qwen_3_4b.safetensors" &
+
+# Upscale model - SkinDiffDetail
+download "https://huggingface.co/jayymeson/ix-ITF-SkinDiffDetail-Lite-v1/resolve/main/ix-ITF-SkinDiffDetail-Lite-v1.pth" \
+  "${MODELS_DIR}/upscale_models/ix-ITF-SkinDiffDetail-Lite-v1.pth" &
+
+# Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
+mkdir -p "${MODELS_DIR}/unet"
+ln -sf "../diffusion_models/z_image_turbo_bf16.safetensors" "${MODELS_DIR}/unet/z_image_turbo_bf16.safetensors" 2>/dev/null || true
+
+wait
+echo "[models] Model downloads completed"
+
+# -----------------------------
 # Cache custom nodes on persistent volume
 # -----------------------------
 REPO_CACHE="${PERSIST_DIR}/_repos"
