@@ -116,8 +116,7 @@ cat > "$CONSTRAINTS_FILE" <<'EOF'
 numpy<2
 opencv-python<4.12
 protobuf<5
-transformers==4.39.3
-tokenizers==0.15.2
+transformers>=4.39.3
 mediapipe==0.10.14
 sageattention
 EOF
@@ -127,70 +126,48 @@ export PIP_CONSTRAINT="$CONSTRAINTS_FILE"
 echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Detect CUDA tag from installed torch
+# Detect what PyTorch is already installed from base image
+INSTALLED_TORCH_VER=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
 CUDA_TAG=$(python3 -c "import torch; print('cu' + torch.version.cuda.replace('.', '')[:4] if torch.version.cuda else 'cpu')" 2>/dev/null || echo "cu128")
 echo "[debug] Detected CUDA tag: $CUDA_TAG"
+echo "[debug] Base image has PyTorch: $INSTALLED_TORCH_VER"
 
-# PyTorch version logic
-TORCH_VER="2.4.1"
-TORCHAUDIO_VER="2.4.1"
-TORCHVISION_VER="0.19.1"
-
-case "$CUDA_TAG" in
-  cu128)
-    # PyTorch 2.8.0 is the stable version for CUDA 12.8
-    TORCH_VER="2.8.0"
-    TORCHAUDIO_VER="2.8.0"
-    TORCHVISION_VER="0.23.0"
-    ;;
-  cu124)
-    TORCH_VER="2.6.0"
-    TORCHAUDIO_VER="2.6.0"
-    TORCHVISION_VER="0.21.0"
-    ;;
-  cu118)
-    TORCH_VER="2.4.1"
-    TORCHAUDIO_VER="2.4.1"
-    TORCHVISION_VER="0.19.1"
-    ;;
-  *)
-    TORCH_VER="2.4.1"
-    TORCHAUDIO_VER="2.4.1"
-    TORCHVISION_VER="0.19.1"
-    ;;
-esac
-
-echo "[pip] Target torch stack: torch=$TORCH_VER torchvision=$TORCHVISION_VER torchaudio=$TORCHAUDIO_VER"
-
-# Install/update torch stack with retries
-MAX_RETRIES=3
-RETRY_COUNT=0
-RETRY_DELAY=5
-
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-  echo "[pip] Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES for torch stack..."
-
-  if $PIP install -q --upgrade --prefer-binary \
+# Use the PyTorch version that RunPod base image provides (don't fight it)
+if [[ "$INSTALLED_TORCH_VER" == "2.10."* ]]; then
+  echo "[pip] Using PyTorch 2.10.x from base image (latest for CUDA 12.8)"
+  # Just ensure torchvision and torchaudio match
+  $PIP install -q --upgrade --prefer-binary \
     --index-url "https://download.pytorch.org/whl/${CUDA_TAG}" \
     --retries 5 --timeout 60 \
-    -c "$CONSTRAINTS_FILE" \
-    "torch==${TORCH_VER}" \
-    "torchvision==${TORCHVISION_VER}" \
-    "torchaudio==${TORCHAUDIO_VER}"; then
-    echo "[pip] Torch stack installed successfully"
-    break
-  else
-    RETRY_COUNT=$((RETRY_COUNT + 1))
-    if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-      echo "[pip] Install failed, retrying in ${RETRY_DELAY}s..."
-      sleep $RETRY_DELAY
-      RETRY_DELAY=$((RETRY_DELAY * 2))
+    "torchvision" "torchaudio" || echo "[pip] WARNING: Failed to update vision/audio"
+else
+  echo "[pip] Base image has older PyTorch, upgrading to latest compatible versions..."
+  # Upgrade to latest PyTorch for CUDA 12.8
+  MAX_RETRIES=3
+  RETRY_COUNT=0
+  RETRY_DELAY=5
+
+  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    echo "[pip] Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES for torch stack..."
+
+    if $PIP install -q --upgrade --prefer-binary \
+      --index-url "https://download.pytorch.org/whl/${CUDA_TAG}" \
+      --retries 5 --timeout 60 \
+      "torch" "torchvision" "torchaudio"; then
+      echo "[pip] Torch stack upgraded successfully"
+      break
     else
-      echo "[pip] WARNING: Failed to install torch stack after $MAX_RETRIES attempts"
-      echo "[pip] Continuing with existing torch installation"
+      RETRY_COUNT=$((RETRY_COUNT + 1))
+      if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+        echo "[pip] Install failed, retrying in ${RETRY_DELAY}s..."
+        sleep $RETRY_DELAY
+        RETRY_DELAY=$((RETRY_DELAY * 2))
+      else
+        echo "[pip] WARNING: Failed to upgrade torch stack, using existing version"
+      fi
     fi
-  fi
-done
+  done
+fi
 
 # Manager style deps
 $PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
@@ -203,9 +180,9 @@ $PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
   "numba" \
   "soundfile" || true
 
-# Install xformers for PyTorch 2.8 + CUDA 12.8
+# Install/upgrade xformers to match current PyTorch version
 if [ "$CUDA_TAG" = "cu128" ]; then
-  echo "[pip] Installing xformers for PyTorch 2.8 + CUDA 12.8..."
+  echo "[pip] Installing xformers for CUDA 12.8 (will match installed PyTorch)..."
   $PIP install -q --upgrade xformers --index-url https://download.pytorch.org/whl/cu128 || true
 fi
 
@@ -324,13 +301,28 @@ clone_or_update() {
   if [ ! -d "${dest}/.git" ]; then
     echo "[nodes] cloning ${name}..."
     rm -rf "$dest"
-    # Speed: use single-branch + shallow clone with optimized config
-    if ! git -c http.extraHeader= -c credential.helper= -c http.postBuffer=524288000 \
-         clone --depth 1 --single-branch --progress "$url" "$dest" 2>&1 | grep -v "Checking out files" || true; then
-      echo "[nodes] WARNING: failed to clone ${name}, skipping"
-      rm -rf "$dest"
-      return 0
-    fi
+
+    # Retry git clone up to 3 times with delays
+    local retries=3
+    local delay=3
+    for ((i=1; i<=retries; i++)); do
+      if git -c http.extraHeader= -c credential.helper= -c http.postBuffer=524288000 \
+           clone --depth 1 --single-branch --progress "$url" "$dest" 2>&1 | grep -v "Checking out files"; then
+        echo "[nodes] Successfully cloned ${name}"
+        break
+      else
+        if [ $i -lt $retries ]; then
+          echo "[nodes] Clone attempt $i failed for ${name}, retrying in ${delay}s..."
+          rm -rf "$dest"
+          sleep $delay
+          delay=$((delay * 2))
+        else
+          echo "[nodes] ERROR: Failed to clone ${name} after $retries attempts, skipping"
+          rm -rf "$dest"
+          return 0
+        fi
+      fi
+    done
   elif [ "$UPDATE_NODES" = "1" ]; then
     echo "[nodes] updating ${name}..."
     git -C "$dest" pull --rebase || true
@@ -407,9 +399,9 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   fi
 fi
 
-# Final re-assert pins (prevents nodes from drifting torch/numpy/transformers)
+# Final re-assert pins (prevents nodes from drifting numpy/opencv/protobuf)
 $PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" "opencv-python<4.12" "protobuf<5" "transformers==4.39.3" "tokenizers==0.15.2" "mediapipe==0.10.14" "sageattention" || true
+  "numpy<2" "opencv-python<4.12" "protobuf<5" "mediapipe==0.10.14" "sageattention" || true
 
 echo "[debug] Final torch stack:"
 $PY - <<'PY'
