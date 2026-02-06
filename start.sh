@@ -334,9 +334,9 @@ download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h
 download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin" \
   "${MODELS_DIR}/detection/vitpose_h_wholebody_data.bin" &
 
-# YOLO detection model (YOLOv10m) - download safetensors, save as .onnx
+# YOLO detection model (YOLOv10m) - safetensors format
 download "https://huggingface.co/jameslahm/yolov10m/resolve/main/model.safetensors" \
-  "${MODELS_DIR}/detection/yolov10m.onnx" &
+  "${MODELS_DIR}/detection/yolov10m.safetensors" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
