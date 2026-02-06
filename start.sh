@@ -338,6 +338,10 @@ download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h
 download "https://huggingface.co/onnx-community/yolov10m/resolve/main/onnx/model.onnx" \
   "${MODELS_DIR}/detection/yolov10m.onnx" &
 
+# CLIP Vision model for WAN workflows (1.26 GB)
+download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors" \
+  "${MODELS_DIR}/clip_vision/clip_vision_h.safetensors" &
+
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
 ln -sf "../diffusion_models/z_image_turbo_bf16.safetensors" "${MODELS_DIR}/unet/z_image_turbo_bf16.safetensors" 2>/dev/null || true
