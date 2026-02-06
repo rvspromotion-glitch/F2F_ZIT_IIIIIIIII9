@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir sentencepiece
 RUN pip install --no-cache-dir protobuf
 RUN pip install --no-cache-dir mediapipe==0.10.14
 RUN pip install --no-cache-dir sageattention
+RUN pip install --no-cache-dir onnxruntime-gpu
 
 # Bake ComfyUI into /opt (won't be hidden by /workspace mount)
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI && \

@@ -294,9 +294,11 @@ mkdir -p \
   "${MODELS_DIR}/clip" \
   "${MODELS_DIR}/clip_vision" \
   "${MODELS_DIR}/controlnet" \
+  "${MODELS_DIR}/detection" \
   "${MODELS_DIR}/diffusion_models" \
   "${MODELS_DIR}/embeddings" \
   "${MODELS_DIR}/loras" \
+  "${MODELS_DIR}/onnx" \
   "${MODELS_DIR}/unet" \
   "${MODELS_DIR}/upscale_models" \
   "${MODELS_DIR}/vae" \
@@ -324,6 +326,14 @@ download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_file
 # Upscale model - SkinDiffDetail (CORRECT: 1x not ix)
 download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/1x-ITF-SkinDiffDetail-Lite-v1.pth" \
   "${MODELS_DIR}/upscale_models/1x-ITF-SkinDiffDetail-Lite-v1.pth" &
+
+# ViTPose model (pose detection ONNX model)
+download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx" \
+  "${MODELS_DIR}/onnx/vitpose_h_wholebody_model.onnx" &
+
+# YOLO detection model (YOLOv10m)
+download "https://huggingface.co/Kijai/yolo_nas_pose_onnx/resolve/main/yolov10m.onnx" \
+  "${MODELS_DIR}/detection/yolov10m.onnx" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
@@ -419,6 +429,10 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
   clone_or_update "ComfyUI-Frame-Interpolation" "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
   clone_or_update "RES4LYF" "https://github.com/ClownsharkBatwing/RES4LYF.git"
   clone_or_update "DJZ-Nodes" "https://github.com/MushroomFleet/DJZ-Nodes.git"
+) &
+
+(
+  clone_or_update "ComfyUI-WanAnimatePreprocess" "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git"
 ) &
 
 wait
