@@ -327,12 +327,15 @@ download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_file
 download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/1x-ITF-SkinDiffDetail-Lite-v1.pth" \
   "${MODELS_DIR}/upscale_models/1x-ITF-SkinDiffDetail-Lite-v1.pth" &
 
-# ViTPose model (pose detection ONNX model) - CORRECTED to models/detection
+# ViTPose model (pose detection ONNX model) - requires both .onnx and .bin files
 download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx" \
   "${MODELS_DIR}/detection/vitpose_h_wholebody_model.onnx" &
 
-# YOLO detection model (YOLOv10m)
-download "https://huggingface.co/Kijai/yolo_nas_pose_onnx/resolve/main/yolov10m.onnx" \
+download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin" \
+  "${MODELS_DIR}/detection/vitpose_h_wholebody_data.bin" &
+
+# YOLO detection model (YOLOv10m) - download safetensors, save as .onnx
+download "https://huggingface.co/jameslahm/yolov10m/resolve/main/model.safetensors" \
   "${MODELS_DIR}/detection/yolov10m.onnx" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
