@@ -327,12 +327,15 @@ download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_file
 download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/1x-ITF-SkinDiffDetail-Lite-v1.pth" \
   "${MODELS_DIR}/upscale_models/1x-ITF-SkinDiffDetail-Lite-v1.pth" &
 
-# ViTPose model (pose detection ONNX model)
+# ViTPose model (pose detection ONNX model) - requires both .onnx and .bin files
 download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx" \
-  "${MODELS_DIR}/onnx/vitpose_h_wholebody_model.onnx" &
+  "${MODELS_DIR}/detection/vitpose_h_wholebody_model.onnx" &
 
-# YOLO detection model (YOLOv10m)
-download "https://huggingface.co/Kijai/yolo_nas_pose_onnx/resolve/main/yolov10m.onnx" \
+download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin" \
+  "${MODELS_DIR}/detection/vitpose_h_wholebody_data.bin" &
+
+# YOLO detection model (YOLOv10m) - download safetensors, save as .onnx
+download "https://huggingface.co/jameslahm/yolov10m/resolve/main/model.safetensors" \
   "${MODELS_DIR}/detection/yolov10m.onnx" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
@@ -433,6 +436,8 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
 
 (
   clone_or_update "ComfyUI-WanAnimatePreprocess" "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git"
+  clone_or_update "ComfyUI-segment-anything-2" "https://github.com/kijai/ComfyUI-segment-anything-2.git"
+  clone_or_update "comfyui-tensorops" "https://github.com/un-seen/comfyui-tensorops.git"
 ) &
 
 wait
