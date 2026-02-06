@@ -432,7 +432,7 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
 ) &
 
 (
-  clone_or_update "WasAnimateReprocess" "https://github.com/WASasquatch/was-node-suite-comfyui.git"
+  clone_or_update "ComfyUI-WanAnimatePreprocess" "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git"
 ) &
 
 wait
