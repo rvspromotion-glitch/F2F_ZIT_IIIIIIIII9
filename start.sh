@@ -481,6 +481,10 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
   clone_or_update "comfyui-tensorops" "https://github.com/un-seen/comfyui-tensorops.git"
 ) &
 
+(
+  clone_or_update "savezipi9" "https://github.com/rvspromotion-glitch/savezipi9.git"
+) &
+
 wait
 
 echo "[nodes] All custom nodes cloned/updated successfully"
