@@ -298,6 +298,7 @@ mkdir -p \
   "${MODELS_DIR}/diffusion_models" \
   "${MODELS_DIR}/embeddings" \
   "${MODELS_DIR}/loras" \
+  "${MODELS_DIR}/lora" \
   "${MODELS_DIR}/onnx" \
   "${MODELS_DIR}/unet" \
   "${MODELS_DIR}/upscale_models" \
@@ -361,10 +362,10 @@ download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/ma
 
 # WAN low noise LoRAs (for improved video quality)
 download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" \
-  "${MODELS_DIR}/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" &
+  "${MODELS_DIR}/lora/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" &
 
 download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" \
-  "${MODELS_DIR}/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" &
+  "${MODELS_DIR}/lora/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
@@ -384,7 +385,7 @@ if [ -n "${CHAR_LORA_URL:-}" ]; then
     CHAR_LORA_FILENAME="character_lora.safetensors"
   fi
 
-  download "$CHAR_LORA_URL" "${MODELS_DIR}/loras/${CHAR_LORA_FILENAME}"
+  download "$CHAR_LORA_URL" "${MODELS_DIR}/lora/${CHAR_LORA_FILENAME}"
   echo "[models] Character LoRA downloaded: ${CHAR_LORA_FILENAME}"
 else
   echo "[models] No character LoRA URL provided (CHAR_LORA_URL not set)"
