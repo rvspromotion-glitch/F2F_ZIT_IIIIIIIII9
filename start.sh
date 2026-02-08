@@ -481,11 +481,47 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
   clone_or_update "comfyui-tensorops" "https://github.com/un-seen/comfyui-tensorops.git"
 ) &
 
-(
-  clone_or_update "savezipi9" "https://github.com/rvspromotion-glitch/savezipi9.git"
-) &
-
 wait
+
+# Special handling for savezipi9 (has two subdirectories with custom nodes)
+echo "[nodes] Installing savezipi9 custom nodes..."
+SAVEZIP_CACHE="${REPO_CACHE}/savezipi9"
+if [ ! -d "${SAVEZIP_CACHE}/.git" ]; then
+  echo "[nodes] cloning savezipi9..."
+  rm -rf "$SAVEZIP_CACHE"
+
+  retries=3
+  delay=3
+  for ((i=1; i<=retries; i++)); do
+    if git -c http.extraHeader= -c credential.helper= -c http.postBuffer=524288000 \
+         clone --depth 1 --single-branch --progress "https://github.com/rvspromotion-glitch/savezipi9.git" "$SAVEZIP_CACHE" 2>&1 | grep -v "Checking out files"; then
+      echo "[nodes] Successfully cloned savezipi9"
+      break
+    else
+      if [ $i -lt $retries ]; then
+        echo "[nodes] Clone attempt $i failed for savezipi9, retrying in ${delay}s..."
+        rm -rf "$SAVEZIP_CACHE"
+        sleep $delay
+        delay=$((delay * 2))
+      else
+        echo "[nodes] ERROR: Failed to clone savezipi9 after $retries attempts, skipping"
+        rm -rf "$SAVEZIP_CACHE"
+      fi
+    fi
+  done
+elif [ "$UPDATE_NODES" = "1" ]; then
+  echo "[nodes] updating savezipi9..."
+  git -C "$SAVEZIP_CACHE" pull --rebase || true
+else
+  echo "[nodes] cached savezipi9 (no pull)"
+fi
+
+# Symlink each subdirectory to custom_nodes (they each have __init__.py)
+if [ -d "$SAVEZIP_CACHE" ]; then
+  ln -sfn "${SAVEZIP_CACHE}/Save-ZIP-I9" "${CUSTOM_NODES}/Save-ZIP-I9"
+  ln -sfn "${SAVEZIP_CACHE}/batch-utility-i9" "${CUSTOM_NODES}/batch-utility-i9"
+  echo "[nodes] Linked Save-ZIP-I9 and batch-utility-i9 subdirectories"
+fi
 
 echo "[nodes] All custom nodes cloned/updated successfully"
 
