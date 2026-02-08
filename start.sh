@@ -346,6 +346,9 @@ download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/ma
 download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors" \
   "${MODELS_DIR}/diffusion_models/wan2.2_animate_14B_bf16.safetensors" &
 
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_12v_low_noise_14B_fp16.safetensors" \
+  "${MODELS_DIR}/diffusion_models/wan2.2_12v_low_noise_14B_fp16.safetensors" &
+
 download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" \
   "${MODELS_DIR}/vae/wan_2.1_vae.safetensors" &
 
