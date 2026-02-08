@@ -334,9 +334,33 @@ download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h
 download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin" \
   "${MODELS_DIR}/detection/vitpose_h_wholebody_data.bin" &
 
-# YOLO detection model (YOLOv10m) - download safetensors, save as .onnx
-download "https://huggingface.co/jameslahm/yolov10m/resolve/main/model.safetensors" \
+# YOLO detection model (YOLOv10m) - ONNX format from official ONNX Community
+download "https://huggingface.co/onnx-community/yolov10m/resolve/main/onnx/model.onnx" \
   "${MODELS_DIR}/detection/yolov10m.onnx" &
+
+# CLIP Vision model for WAN workflows (1.26 GB)
+download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors" \
+  "${MODELS_DIR}/clip_vision/clip_vision_h.safetensors" &
+
+# WAN 2.2 Animate models (for video generation workflows)
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors" \
+  "${MODELS_DIR}/diffusion_models/wan2.2_animate_14B_bf16.safetensors" &
+
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_12v_low_noise_14B_fp16.safetensors" \
+  "${MODELS_DIR}/diffusion_models/wan2.2_12v_low_noise_14B_fp16.safetensors" &
+
+download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" \
+  "${MODELS_DIR}/vae/wan_2.1_vae.safetensors" &
+
+download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors" \
+  "${MODELS_DIR}/clip/umt5_xxl_fp16.safetensors" &
+
+# WAN low noise LoRAs (for improved video quality)
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" \
+  "${MODELS_DIR}/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" &
+
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" \
+  "${MODELS_DIR}/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
@@ -344,6 +368,23 @@ ln -sf "../diffusion_models/z_image_turbo_bf16.safetensors" "${MODELS_DIR}/unet/
 
 wait
 echo "[models] Model downloads completed"
+
+# -----------------------------
+# Character LoRA download (via environment variable)
+# -----------------------------
+if [ -n "${CHAR_LORA_URL:-}" ]; then
+  echo "[models] Character LoRA URL provided, downloading..."
+  # Extract filename from URL or use default
+  CHAR_LORA_FILENAME=$(basename "$CHAR_LORA_URL" | sed 's/\?.*$//')
+  if [ -z "$CHAR_LORA_FILENAME" ] || [[ "$CHAR_LORA_FILENAME" != *.* ]]; then
+    CHAR_LORA_FILENAME="character_lora.safetensors"
+  fi
+
+  download "$CHAR_LORA_URL" "${MODELS_DIR}/loras/${CHAR_LORA_FILENAME}"
+  echo "[models] Character LoRA downloaded: ${CHAR_LORA_FILENAME}"
+else
+  echo "[models] No character LoRA URL provided (CHAR_LORA_URL not set)"
+fi
 
 # -----------------------------
 # Cache custom nodes on persistent volume
@@ -438,6 +479,10 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
   clone_or_update "ComfyUI-WanAnimatePreprocess" "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git"
   clone_or_update "ComfyUI-segment-anything-2" "https://github.com/kijai/ComfyUI-segment-anything-2.git"
   clone_or_update "comfyui-tensorops" "https://github.com/un-seen/comfyui-tensorops.git"
+) &
+
+(
+  clone_or_update "savezipi9" "https://github.com/rvspromotion-glitch/savezipi9.git"
 ) &
 
 wait
