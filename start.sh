@@ -346,8 +346,12 @@ download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/ma
 download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors" \
   "${MODELS_DIR}/diffusion_models/wan2.2_animate_14B_bf16.safetensors" &
 
-download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_12v_low_noise_14B_fp16.safetensors" \
-  "${MODELS_DIR}/diffusion_models/wan2.2_12v_low_noise_14B_fp16.safetensors" &
+# WAN 2.2 low noise models (T2V and I2V)
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors" \
+  "${MODELS_DIR}/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors" &
+
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp16.safetensors" \
+  "${MODELS_DIR}/diffusion_models/wan2.2_i2v_low_noise_14B_fp16.safetensors" &
 
 download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" \
   "${MODELS_DIR}/vae/wan_2.1_vae.safetensors" &
@@ -355,12 +359,12 @@ download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/ma
 download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors" \
   "${MODELS_DIR}/clip/umt5_xxl_fp16.safetensors" &
 
-# WAN low noise LoRAs (for improved video quality)
-download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" \
-  "${MODELS_DIR}/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" &
+# WAN low noise LoRAs (for improved video quality - 4 step distilled)
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors" \
+  "${MODELS_DIR}/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors" &
 
-download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" \
-  "${MODELS_DIR}/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" &
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" \
+  "${MODELS_DIR}/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
@@ -481,11 +485,47 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
   clone_or_update "comfyui-tensorops" "https://github.com/un-seen/comfyui-tensorops.git"
 ) &
 
-(
-  clone_or_update "savezipi9" "https://github.com/rvspromotion-glitch/savezipi9.git"
-) &
-
 wait
+
+# Special handling for savezipi9 (has two subdirectories with custom nodes)
+echo "[nodes] Installing savezipi9 custom nodes..."
+SAVEZIP_CACHE="${REPO_CACHE}/savezipi9"
+if [ ! -d "${SAVEZIP_CACHE}/.git" ]; then
+  echo "[nodes] cloning savezipi9..."
+  rm -rf "$SAVEZIP_CACHE"
+
+  retries=3
+  delay=3
+  for ((i=1; i<=retries; i++)); do
+    if git -c http.extraHeader= -c credential.helper= -c http.postBuffer=524288000 \
+         clone --depth 1 --single-branch --progress "https://github.com/rvspromotion-glitch/savezipi9.git" "$SAVEZIP_CACHE" 2>&1 | grep -v "Checking out files"; then
+      echo "[nodes] Successfully cloned savezipi9"
+      break
+    else
+      if [ $i -lt $retries ]; then
+        echo "[nodes] Clone attempt $i failed for savezipi9, retrying in ${delay}s..."
+        rm -rf "$SAVEZIP_CACHE"
+        sleep $delay
+        delay=$((delay * 2))
+      else
+        echo "[nodes] ERROR: Failed to clone savezipi9 after $retries attempts, skipping"
+        rm -rf "$SAVEZIP_CACHE"
+      fi
+    fi
+  done
+elif [ "$UPDATE_NODES" = "1" ]; then
+  echo "[nodes] updating savezipi9..."
+  git -C "$SAVEZIP_CACHE" pull --rebase || true
+else
+  echo "[nodes] cached savezipi9 (no pull)"
+fi
+
+# Symlink each subdirectory to custom_nodes (they each have __init__.py)
+if [ -d "$SAVEZIP_CACHE" ]; then
+  ln -sfn "${SAVEZIP_CACHE}/Save-ZIP-I9" "${CUSTOM_NODES}/Save-ZIP-I9"
+  ln -sfn "${SAVEZIP_CACHE}/batch-utility-i9" "${CUSTOM_NODES}/batch-utility-i9"
+  echo "[nodes] Linked Save-ZIP-I9 and batch-utility-i9 subdirectories"
+fi
 
 echo "[nodes] All custom nodes cloned/updated successfully"
 
