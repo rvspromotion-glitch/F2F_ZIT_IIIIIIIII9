@@ -359,12 +359,12 @@ download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/ma
 download "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors" \
   "${MODELS_DIR}/clip/umt5_xxl_fp16.safetensors" &
 
-# WAN low noise LoRAs (for improved video quality)
-download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" \
-  "${MODELS_DIR}/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors" &
+# WAN low noise LoRAs (for improved video quality - 4 step distilled)
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors" \
+  "${MODELS_DIR}/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors" &
 
-download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" \
-  "${MODELS_DIR}/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors" &
+download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" \
+  "${MODELS_DIR}/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" &
 
 # Create symlinks for UNET directory (ComfyUI sometimes looks in unet/ instead of diffusion_models/)
 mkdir -p "${MODELS_DIR}/unet"
