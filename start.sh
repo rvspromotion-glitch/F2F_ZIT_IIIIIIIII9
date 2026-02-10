@@ -485,6 +485,10 @@ clone_or_update "ComfyUI-Manager" "https://github.com/ltdrdata/ComfyUI-Manager.g
   clone_or_update "comfyui-tensorops" "https://github.com/un-seen/comfyui-tensorops.git"
 ) &
 
+(
+  clone_or_update "ComfyUI-NovaNoiser" "https://github.com/Aloukik21/ComfyUI-NovaNoiser.git"
+) &
+
 wait
 
 # Special handling for savezipi9 (has two subdirectories with custom nodes)
