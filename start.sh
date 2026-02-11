@@ -323,9 +323,30 @@ ln -sf "../ae.safetensors" "${MODELS_DIR}/vae/pixel_space/z-index-ae.safetensors
 download "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
   "${MODELS_DIR}/clip/qwen_3_4b.safetensors" &
 
-# Upscale model - SkinDiffDetail (CORRECT: 1x not ix)
+# Upscale models - SkinDiffDetail (CORRECT: 1x not ix)
 download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/1x-ITF-SkinDiffDetail-Lite-v1.pth" \
   "${MODELS_DIR}/upscale_models/1x-ITF-SkinDiffDetail-Lite-v1.pth" &
+
+# SOTA Upscale models for realism and skin detail
+# RealESRGAN 4x+ - Best overall for photos, enhances textures and minimizes noise
+download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/RealESRGAN_x4plus.pth" \
+  "${MODELS_DIR}/upscale_models/RealESRGAN_x4plus.pth" &
+
+# 4x-UltraSharp - Sharp detail for realistic images
+download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/4x-UltraSharp.pth" \
+  "${MODELS_DIR}/upscale_models/4x-UltraSharp.pth" &
+
+# 4x-Foolhardy Remacri - Superior texture reconstruction
+download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/4x_foolhardy_Remacri.pth" \
+  "${MODELS_DIR}/upscale_models/4x_foolhardy_Remacri.pth" &
+
+# NMKD Superscale - Perfect for clean real-world images
+download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/4x_NMKD-Superscale-SP_178000_G.pth" \
+  "${MODELS_DIR}/upscale_models/4x_NMKD-Superscale-SP_178000_G.pth" &
+
+# 4xNomos8kDAT - High-quality advanced upscaling (trained on 8K data)
+download "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/4xNomos8kDAT.pth" \
+  "${MODELS_DIR}/upscale_models/4xNomos8kDAT.pth" &
 
 # ViTPose model (pose detection ONNX model) - requires both .onnx and .bin files
 download "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx" \
