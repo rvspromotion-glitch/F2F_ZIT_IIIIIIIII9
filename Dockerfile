@@ -12,16 +12,21 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
-# Don't install xformers in Dockerfile - let start.sh handle it to match PyTorch version
-RUN pip install --no-cache-dir "numpy<2"
-RUN pip install --no-cache-dir ultralytics
-RUN pip install --no-cache-dir jupyterlab
-RUN pip install --no-cache-dir sentencepiece
-RUN pip install --no-cache-dir protobuf
-RUN pip install --no-cache-dir mediapipe==0.10.14
-RUN pip install --no-cache-dir sageattention
-RUN pip install --no-cache-dir onnxruntime-gpu
-RUN pip install --no-cache-dir google-generativeai
+# Install core dependencies with correct versions to avoid conflicts
+RUN pip install --no-cache-dir "numpy<2" "protobuf<5" "opencv-python<4.12"
+
+# Upgrade PyTorch stack to latest for CUDA 12.8 (do once in Dockerfile, not at runtime)
+RUN pip install --no-cache-dir --upgrade --prefer-binary \
+    --index-url https://download.pytorch.org/whl/cu128 \
+    torch torchvision torchaudio xformers
+
+# Install application dependencies
+RUN pip install --no-cache-dir ultralytics jupyterlab sentencepiece \
+    mediapipe==0.10.14 sageattention onnxruntime-gpu google-generativeai
+
+# Install Manager-style deps that custom nodes commonly need
+RUN pip install --no-cache-dir ftfy "accelerate>=1.2.1" einops \
+    "diffusers>=0.33.0" "librosa>=0.9.0" "tqdm>=4.62.0" numba soundfile
 
 # Bake ComfyUI into /opt (won't be hidden by /workspace mount)
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI && \

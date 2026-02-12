@@ -126,65 +126,8 @@ export PIP_CONSTRAINT="$CONSTRAINTS_FILE"
 echo "[pip] Enforcing constraints:"
 cat "$CONSTRAINTS_FILE"
 
-# Detect what PyTorch is already installed from base image
-INSTALLED_TORCH_VER=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
-CUDA_TAG=$(python3 -c "import torch; print('cu' + torch.version.cuda.replace('.', '')[:4] if torch.version.cuda else 'cpu')" 2>/dev/null || echo "cu128")
-echo "[debug] Detected CUDA tag: $CUDA_TAG"
-echo "[debug] Base image has PyTorch: $INSTALLED_TORCH_VER"
-
-# Use the PyTorch version that RunPod base image provides (don't fight it)
-if [[ "$INSTALLED_TORCH_VER" == "2.10."* ]]; then
-  echo "[pip] Using PyTorch 2.10.x from base image (latest for CUDA 12.8)"
-  # Just ensure torchvision and torchaudio match
-  $PIP install -q --upgrade --prefer-binary \
-    --index-url "https://download.pytorch.org/whl/${CUDA_TAG}" \
-    --retries 5 --timeout 60 \
-    "torchvision" "torchaudio" || echo "[pip] WARNING: Failed to update vision/audio"
-else
-  echo "[pip] Base image has older PyTorch, upgrading to latest compatible versions..."
-  # Upgrade to latest PyTorch for CUDA 12.8
-  MAX_RETRIES=3
-  RETRY_COUNT=0
-  RETRY_DELAY=5
-
-  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    echo "[pip] Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES for torch stack..."
-
-    if $PIP install -q --upgrade --prefer-binary \
-      --index-url "https://download.pytorch.org/whl/${CUDA_TAG}" \
-      --retries 5 --timeout 60 \
-      "torch" "torchvision" "torchaudio"; then
-      echo "[pip] Torch stack upgraded successfully"
-      break
-    else
-      RETRY_COUNT=$((RETRY_COUNT + 1))
-      if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-        echo "[pip] Install failed, retrying in ${RETRY_DELAY}s..."
-        sleep $RETRY_DELAY
-        RETRY_DELAY=$((RETRY_DELAY * 2))
-      else
-        echo "[pip] WARNING: Failed to upgrade torch stack, using existing version"
-      fi
-    fi
-  done
-fi
-
-# Manager style deps
-$PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "ftfy" \
-  "accelerate>=1.2.1" \
-  "einops" \
-  "diffusers>=0.33.0" \
-  "librosa>=0.9.0" \
-  "tqdm>=4.62.0" \
-  "numba" \
-  "soundfile" || true
-
-# Install/upgrade xformers to match current PyTorch version
-if [ "$CUDA_TAG" = "cu128" ]; then
-  echo "[pip] Installing xformers for CUDA 12.8 (will match installed PyTorch)..."
-  $PIP install -q --upgrade xformers --index-url https://download.pytorch.org/whl/cu128 || true
-fi
+# PyTorch and all deps are pre-installed in Dockerfile - just verify versions
+echo "[pip] Verifying pre-installed PyTorch stack..."
 
 echo "[debug] Versions:"
 $PY - <<'PY'
@@ -574,10 +517,6 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
     echo "[pip] Node requirements already installed (skip)"
   fi
 fi
-
-# Final re-assert pins (prevents nodes from drifting numpy/opencv/protobuf)
-$PIP install -q --upgrade --prefer-binary -c "$CONSTRAINTS_FILE" \
-  "numpy<2" "opencv-python<4.12" "protobuf<5" "mediapipe==0.10.14" "sageattention" || true
 
 echo "[debug] Final torch stack:"
 $PY - <<'PY'
