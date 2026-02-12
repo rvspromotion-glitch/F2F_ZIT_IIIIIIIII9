@@ -506,8 +506,9 @@ fi
 
 echo "[nodes] All custom nodes cloned/updated successfully"
 
-# Install node requirements
-INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
+# Install node requirements (disabled by default - all common deps pre-installed in Dockerfile)
+# Set INSTALL_NODE_REQS=1 environment variable to enable if needed
+INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-0}"
 REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 
 if [ "$INSTALL_NODE_REQS" = "1" ]; then
@@ -525,6 +526,8 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   else
     echo "[pip] Node requirements already installed (skip)"
   fi
+else
+  echo "[pip] Skipping node requirements installation (all common deps pre-installed)"
 fi
 
 echo "[debug] Final torch stack:"
