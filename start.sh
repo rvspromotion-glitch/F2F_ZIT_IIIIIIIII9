@@ -375,7 +375,12 @@ clone_or_update() {
     local retries=3
     local delay=3
     for ((i=1; i<=retries; i++)); do
-      if git -c http.extraHeader= -c credential.helper= -c http.postBuffer=524288000 \
+      # Completely disable all credential prompts and authentication
+      if GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true git \
+           -c http.extraHeader= \
+           -c credential.helper= \
+           -c http.postBuffer=524288000 \
+           -c core.askPass= \
            clone --depth 1 --single-branch --progress "$url" "$dest" 2>&1 | grep -v "Checking out files"; then
         echo "[nodes] Successfully cloned ${name}"
         break
@@ -465,7 +470,11 @@ if [ ! -d "${SAVEZIP_CACHE}/.git" ]; then
   retries=3
   delay=3
   for ((i=1; i<=retries; i++)); do
-    if git -c http.extraHeader= -c credential.helper= -c http.postBuffer=524288000 \
+    if GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true git \
+         -c http.extraHeader= \
+         -c credential.helper= \
+         -c http.postBuffer=524288000 \
+         -c core.askPass= \
          clone --depth 1 --single-branch --progress "https://github.com/rvspromotion-glitch/savezipi9.git" "$SAVEZIP_CACHE" 2>&1 | grep -v "Checking out files"; then
       echo "[nodes] Successfully cloned savezipi9"
       break
