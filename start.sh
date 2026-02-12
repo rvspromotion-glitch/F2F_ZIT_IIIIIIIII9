@@ -74,8 +74,8 @@ COMFY_DIR="${COMFYUI_PATH:-/workspace/ComfyUI}"
 CUSTOM_NODES="${COMFY_DIR}/custom_nodes"
 MODELS_DIR="${COMFY_DIR}/models"
 
-# Persistent RunPod volume
-PERSIST_DIR="${RUNPOD_VOLUME:-/workspace/runpod-volume}"
+# Persistent RunPod volume (correct path for RunPod)
+PERSIST_DIR="${RUNPOD_VOLUME:-/workspace/runpod-slim}"
 
 # Optional baked fallback (if /workspace is a mounted empty volume)
 BAKED_DIR="${COMFYUI_BAKED:-/opt/ComfyUI}"
@@ -506,7 +506,8 @@ fi
 
 echo "[nodes] All custom nodes cloned/updated successfully"
 
-# Install node requirements
+# Install node requirements (enabled by default, but only runs once due to cache)
+# Set INSTALL_NODE_REQS=0 environment variable to skip if needed
 INSTALL_NODE_REQS="${INSTALL_NODE_REQS:-1}"
 REQ_MARK="${PERSIST_DIR}/.node-reqs-installed"
 
@@ -525,6 +526,8 @@ if [ "$INSTALL_NODE_REQS" = "1" ]; then
   else
     echo "[pip] Node requirements already installed (skip)"
   fi
+else
+  echo "[pip] Skipping node requirements installation (INSTALL_NODE_REQS=0)"
 fi
 
 echo "[debug] Final torch stack:"

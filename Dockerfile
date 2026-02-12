@@ -28,6 +28,22 @@ RUN pip install --no-cache-dir ultralytics jupyterlab sentencepiece \
 RUN pip install --no-cache-dir ftfy "accelerate>=1.2.1" einops \
     "diffusers>=0.33.0" "librosa>=0.9.0" "tqdm>=4.62.0" numba soundfile
 
+# Pre-install ALL common custom node dependencies (prevents 1h runtime install)
+RUN pip install --no-cache-dir \
+    scikit-image scipy scikit-learn \
+    matplotlib seaborn pyqt5 \
+    pillow piexif lpips \
+    timm segment-anything \
+    transformers tokenizers safetensors \
+    opencv-contrib-python insightface \
+    imageio imageio-ffmpeg av \
+    kornia albumentations \
+    omegaconf pyyaml \
+    requests aiohttp \
+    huggingface-hub \
+    onnx \
+    spandrel
+
 # Bake ComfyUI into /opt (won't be hidden by /workspace mount)
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI && \
     pip install --no-cache-dir -r /opt/ComfyUI/requirements.txt
