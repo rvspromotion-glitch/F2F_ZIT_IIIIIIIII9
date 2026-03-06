@@ -303,6 +303,9 @@ download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/ma
 download "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" \
   "${MODELS_DIR}/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors" &
 
+download "https://huggingface.co/NSFW-API/NSFW_Wan_14b/resolve/main/nsfw_wan_14b_e15.safetensors" \
+  "${MODELS_DIR}/diffusion_models/nsfw_wan_14b_e15.safetensors" &
+
 # Wait for all downloads
 wait
 echo "[models] Downloads completed!"
